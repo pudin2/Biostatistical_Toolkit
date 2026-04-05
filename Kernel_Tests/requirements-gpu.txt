@@ -1,0 +1,6 @@
+# Instala primero el base:
+-r requirements.txt
+
+# Opcional: aceleracion GPU para los notebooks que usan CuPy.
+# Requiere una instalacion de CUDA compatible en Windows.
+cupy-cuda13x
