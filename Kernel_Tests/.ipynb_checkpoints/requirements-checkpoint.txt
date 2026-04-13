@@ -1,0 +1,11 @@
+# Dependencias base para ejecutar todos los notebooks de Kernel_Tests en CPU
+jupyterlab
+ipykernel
+ipywidgets
+numpy
+pandas
+matplotlib
+seaborn
+scipy
+scikit-learn
+tqdm
