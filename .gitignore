@@ -1,1 +1,21 @@
 Resultados_Bipartito/kuramoto_bipartito_A_cols.csv
+
+# Kernel_Tests: artefactos LaTeX
+Kernel_Tests/*.aux
+Kernel_Tests/*.log
+Kernel_Tests/*.out
+Kernel_Tests/*.toc
+Kernel_Tests/*.snm
+Kernel_Tests/*.nav
+Kernel_Tests/*.vrb
+
+# Kernel_Tests: caches y checkpoints
+Kernel_Tests/**/.ipynb_checkpoints/
+Kernel_Tests/**/__pycache__/
+Kernel_Tests/kernels/**/__pycache__/
+
+# Kernel_Tests: outputs efimeros del orquestador y artefactos LaTeX adicionales
+Kernel_Tests/out/
+Kernel_Tests/**/*.fls
+Kernel_Tests/**/*.fdb_latexmk
+Kernel_Tests/**/*.synctex.gz
