@@ -1,26 +1,7 @@
-"""
-kernels
-=======
-Modulo reutilizable para el subproyecto Kernel_Tests.
+"""Utilidades KDE para la etapa ``Kernel_Tests``.
 
-Centraliza la logica que estaba duplicada en notebooks y scripts:
-    - core:       formulas K(u) de los 6 kernels (CPU NumPy y GPU CuPy)
-    - kde:        evaluador KDE con backend GPU (CuPy) o CPU (sklearn) y chunking
-    - bandwidth:  reglas Scott / Silverman y cross-validation log-likelihood
-    - stats:      KS, Cramer-von Mises, Jensen-Shannon, masa positiva, modas, CDF
-    - data:       carga de los valores OTU positivos
-    - metadata:   constantes (AMISE, h_eq, GPU_TIMING, GRIDSIZE_CONVERGENCE)
-    - cosine_approx: aproximaciones polinomicas / racionales del kernel coseno
-
-Importacion tipica:
-
-    from kernels.data import load_otu_positives
-    from kernels.bandwidth import scott_h, cv_loglik
-    from kernels.kde import KDEEvaluator
-    from kernels.stats import ks_distance, jensen_shannon
-
-El modulo es ADITIVO: scripts y notebooks existentes no estan obligados a
-migrar. Sirve como fuente unica para nuevo codigo (ej. cosine_approx).
+El paquete conserva una sola fuente de verdad para los seis kernels usados
+por el proyecto y para la evaluacion KDE univariada.
 """
 from __future__ import annotations
 

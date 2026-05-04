@@ -1,29 +1,50 @@
-"""
-kde
-===
-Evaluador KDE univariado con doble backend:
+"""Evaluador KDE univariado con backend CPU/GPU opcional.
 
-- GPU (CuPy) cuando hay tarjeta disponible -> chunked, alta capacidad.
-- CPU (sklearn) como fallback automatico.
-
-Equivalente a la logica que los notebooks
-``KDE_*MultiKernel.ipynb`` y los scripts (compute_cv, build_assets)
-implementan en linea.
-
-Uso tipico:
+Uso:
 
     from kernels.kde import KDEEvaluator
     kde = KDEEvaluator(values, kernel="cosine", bandwidth=4.428)
     pdf = kde.evaluate(x_grid)
-
-El chunking en GPU usa ~1755 puntos de evaluacion por lote, copiando
-el numero medido en KDE_Gridsize_Sensitivity_MultiKernel.ipynb.
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+import os
+from pathlib import Path
 
 import numpy as np
+from sklearn.neighbors import KernelDensity
+
+
+def _prepare_cuda_windows() -> None:
+    """Normaliza CUDA en Windows antes de importar CuPy."""
+    if os.name != "nt":
+        return
+
+    candidates = [
+        os.environ.get("CUDA_PATH"),
+        os.environ.get("CUDA_PATH_V13_1"),
+        os.environ.get("CUDA_PATH_V13_0"),
+        os.environ.get("CUDA_PATH_V12_9"),
+        os.environ.get("CUDA_PATH_V12_8"),
+        os.environ.get("CUDA_PATH_V12_6"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        root = Path(candidate)
+        if root.name.lower() == "bin":
+            root = root.parent
+        bin_dir = root / "bin"
+        if bin_dir.exists():
+            os.environ["CUDA_PATH"] = str(root)
+            try:
+                os.add_dll_directory(str(bin_dir))
+            except (FileNotFoundError, OSError):
+                pass
+            return
+
+
+_prepare_cuda_windows()
 
 try:
     import cupy as cp  # type: ignore
@@ -32,11 +53,10 @@ except Exception:
     cp = None  # type: ignore
     _HAS_CUPY = False
 
-from . import core as _core   # late binding: permite que tests/benchmarks
-                              # monkeypatcheen core.kernel_eval y la
-                              # sustitucion se vea reflejada aqui.
+from . import KERNELS
+from . import core as _core
 
-DEFAULT_CHUNK = 1755
+DEFAULT_CHUNK = 128
 
 
 def gpu_available() -> bool:
@@ -51,19 +71,12 @@ def gpu_available() -> bool:
 
 def _evaluate_cpu(
     data: np.ndarray, x_grid: np.ndarray, bandwidth: float, kernel: str,
+    chunk: int = DEFAULT_CHUNK,
 ) -> np.ndarray:
-    """KDE sumando contribuciones K((x - xi)/h)/h. NumPy puro."""
-    n = data.size
-    out = np.zeros_like(x_grid, dtype=float)
-    # Vectorizacion por puntos del grid (M pequeno respecto a N normalmente).
-    # Para mantener memoria estable se itera por chunks del grid.
-    chunk = max(1, min(DEFAULT_CHUNK, x_grid.size))
-    for start in range(0, x_grid.size, chunk):
-        end = min(start + chunk, x_grid.size)
-        u = (x_grid[start:end][:, None] - data[None, :]) / bandwidth
-        ku = _core.kernel_eval(u, kernel, xp=np)
-        out[start:end] = ku.sum(axis=1) / (n * bandwidth)
-    return out
+    """KDE CPU usando la implementacion optimizada de scikit-learn."""
+    kde = KernelDensity(kernel=kernel, bandwidth=bandwidth)
+    kde.fit(data.reshape(-1, 1))
+    return np.exp(kde.score_samples(x_grid.reshape(-1, 1)))
 
 
 def _evaluate_gpu(
@@ -85,30 +98,7 @@ def _evaluate_gpu(
 
 
 class KDEEvaluator:
-    """
-    Evaluador KDE con seleccion de backend.
-
-    Parameters
-    ----------
-    data : np.ndarray
-        Vector 1D de muestras.
-    kernel : str
-        Nombre del kernel (ver ``kernels.core``).
-    bandwidth : float
-        h absoluto.
-    backend : {"auto", "gpu", "cpu"}
-        - ``"auto"``: GPU si esta disponible, si no CPU.
-        - ``"gpu"`` : fuerza CuPy. Lanza si no hay GPU.
-        - ``"cpu"`` : NumPy puro.
-    chunk : int
-        Puntos de grid por lote (solo aplica a GPU). Default 1755 = numero
-        medido en KDE_Gridsize_Sensitivity_MultiKernel.ipynb.
-
-    Notes
-    -----
-    Se mantiene una API minima a proposito: ``evaluate(grid)`` es lo que
-    usan todos los analisis del estudio.
-    """
+    """Evaluador KDE con seleccion de backend y chunking estable."""
 
     def __init__(
         self,
@@ -120,7 +110,12 @@ class KDEEvaluator:
     ) -> None:
         if bandwidth <= 0:
             raise ValueError(f"bandwidth debe ser > 0, recibido {bandwidth}")
+        if kernel not in KERNELS:
+            raise ValueError(f"Kernel desconocido: {kernel}. Valid: {KERNELS}")
         self.data = np.ascontiguousarray(np.asarray(data, dtype=float).ravel())
+        self.data = self.data[np.isfinite(self.data)]
+        if self.data.size == 0:
+            raise ValueError("KDEEvaluator requiere datos finitos.")
         self.kernel = kernel
         self.bandwidth = float(bandwidth)
         self.chunk = int(chunk)
@@ -137,7 +132,7 @@ class KDEEvaluator:
         x = np.asarray(x_grid, dtype=float).ravel()
         if self.backend == "gpu":
             return _evaluate_gpu(self.data, x, self.bandwidth, self.kernel, self.chunk)
-        return _evaluate_cpu(self.data, x, self.bandwidth, self.kernel)
+        return _evaluate_cpu(self.data, x, self.bandwidth, self.kernel, self.chunk)
 
 
 def evaluate_kde(

@@ -1,20 +1,7 @@
-"""
-core
-====
-Implementacion unica de las 6 funciones kernel K(u) usadas en el estudio.
+"""Formulas exactas de los seis kernels KDE usados por el proyecto.
 
-Cada kernel se evalua sobre un array ``u = (x - x_data) / h``. Las formulas
-son las mismas que aparecen en los notebooks (KDE_Estadisticas_MultiKernel,
-KDE_Gridsize_Sensitivity_MultiKernel) y en sklearn.neighbors.KernelDensity.
-
-El parametro ``xp`` permite trabajar tanto con NumPy (CPU) como con CuPy
-(GPU) sin duplicar codigo: se le pasa el modulo, no el array. Ambos
-modulos exponen la misma API (``xp.exp``, ``xp.cos``, ``xp.where``, ...).
-
-Convenio de normalizacion: cada kernel integra a 1 en u (no en x).
-La normalizacion final por h se aplica fuera, en el evaluador KDE.
-
-Formulas (referencia: tabla de la slide "Formas funcionales de los 6 kernels"):
+Cada kernel integra a 1 en la variable normalizada ``u``. La normalizacion
+por bandwidth se aplica en ``kernels.kde``.
 
     Gaussian:     K(u) = (1/sqrt(2*pi)) * exp(-u^2 / 2)              soporte R
     Epanechnikov: K(u) = (3/4) * (1 - u^2)         si |u| <= 1

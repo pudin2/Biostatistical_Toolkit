@@ -1,21 +1,4 @@
-"""
-bandwidth
-=========
-Selectores de ancho de banda h para KDE univariada.
-
-- ``scott_h``       : regla de Scott   h = sigma * n^(-1/5)
-- ``silverman_h``   : regla de Silverman, ligeramente robusta a colas
-- ``cv_loglik``     : cross-validation por log-verosimilitud (k-fold)
-
-Las dos primeras reproducen el comportamiento de
-``scipy.stats.gaussian_kde(...).factor * std`` que es como se calculan
-en los scripts originales (compute_cv_all_kernels.py:104,
-build_kernel_report_assets.py:90).
-
-``cv_loglik`` envuelve la logica de
-``compute_cv_all_kernels.compute_cv_bandwidth`` con los mismos defaults
-(submuestra 10000, 5 folds, 40 anchos en geomspace [0.02*Scott, 3*Scott]).
-"""
+"""Selectores de bandwidth para KDE univariada."""
 from __future__ import annotations
 
 import numpy as np
@@ -25,14 +8,15 @@ from sklearn.neighbors import KernelDensity
 
 
 def scott_h(values: np.ndarray) -> float:
-    """h Scott absoluto. Usa scipy para calcular el factor con los mismos
-    convenios que los scripts existentes."""
+    """Bandwidth absoluto por regla de Scott."""
+    values = _prepare_values(values)
     std = float(np.std(values, ddof=1))
     return float(gaussian_kde(values, bw_method="scott").factor * std)
 
 
 def silverman_h(values: np.ndarray) -> float:
-    """h Silverman absoluto."""
+    """Bandwidth absoluto por regla de Silverman."""
+    values = _prepare_values(values)
     std = float(np.std(values, ddof=1))
     return float(gaussian_kde(values, bw_method="silverman").factor * std)
 
@@ -48,23 +32,15 @@ def cv_loglik(
     seed: int = 42,
     verbose: bool = False,
 ) -> tuple[float, np.ndarray, np.ndarray]:
-    """
-    Selecciona h por k-fold cross-validation maximizando la log-verosimilitud.
-
-    Reproduce ``compute_cv_all_kernels.compute_cv_bandwidth`` con la misma
-    estructura: rango [bw_lo_factor * Scott, bw_hi_factor * Scott] (con piso
-    de 0.5 para evitar h = 0).
-
-    Returns
-    -------
-    h_cv : float
-    bw_grid : np.ndarray
-    scores : np.ndarray
-        Log-verosimilitud media (sobre folds) en cada bw del grid.
-    """
+    """Selecciona bandwidth por k-fold CV de log-verosimilitud."""
+    values = _prepare_values(values)
     rng = np.random.default_rng(seed)
     n = len(values)
     k = min(n_subsample, n)
+    folds = min(cv_folds, k)
+    if folds < 2:
+        raise ValueError("cv_loglik requiere al menos 2 observaciones para CV.")
+
     idx = rng.choice(n, size=k, replace=False)
     sample = values[idx].reshape(-1, 1)
 
@@ -73,7 +49,7 @@ def cv_loglik(
     bw_max = bw_scott_abs * bw_hi_factor
     bw_grid = np.geomspace(bw_min, bw_max, n_bw)
 
-    kf = KFold(n_splits=cv_folds, shuffle=True, random_state=seed)
+    kf = KFold(n_splits=folds, shuffle=True, random_state=seed)
     scores = np.zeros(n_bw)
     for i, bw in enumerate(bw_grid):
         fold_scores = []
@@ -87,6 +63,16 @@ def cv_loglik(
 
     best_idx = int(np.argmax(scores))
     return float(bw_grid[best_idx]), bw_grid, scores
+
+
+def _prepare_values(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).ravel()
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 2:
+        raise ValueError("Se requieren al menos 2 valores finitos.")
+    if np.nanstd(arr, ddof=1) <= 0:
+        raise ValueError("El bandwidth no se puede estimar con varianza cero.")
+    return arr
 
 
 __all__ = ["scott_h", "silverman_h", "cv_loglik"]
