@@ -1,8 +1,6 @@
 # Kernel_Tests
 
 Etapa modular para estimar densidades KDE sobre valores OTU positivos.
-La carpeta queda organizada como notebooks independientes y autocontenidos,
-en el mismo estilo de `Statistic_Methods`.
 
 ## Estructura
 
