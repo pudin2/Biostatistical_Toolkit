@@ -1,11 +1,11 @@
-# Dependencias base para ejecutar todos los notebooks de Kernel_Tests en CPU
+# Dependencias para ejecutar Kernel_Tests/KDE_Estimaciones.ipynb
 jupyterlab
 ipykernel
-ipywidgets
 numpy
 pandas
 matplotlib
-seaborn
 scipy
 scikit-learn
-tqdm
+
+# Opcional para GPU CUDA 13.x en Windows:
+# cupy-cuda13x
