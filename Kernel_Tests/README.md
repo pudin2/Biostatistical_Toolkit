@@ -1,7 +1,8 @@
 # Kernel_Tests
 
 Etapa modular para estimar densidades KDE sobre valores OTU positivos.
-La carpeta queda organizada como notebooks independientes y autocontenidos.
+La carpeta queda organizada como notebooks independientes y autocontenidos,
+en el mismo estilo de `Statistic_Methods`.
 
 ## Estructura
 
@@ -17,35 +18,70 @@ Kernel_Tests/
 ## Flujo
 
 1. `Estimacion_Grid.ipynb`
-   - Carga los valores positivos.
+   - Carga los valores positivos desde `DATA_PATH`.
    - Resume el volumen de datos.
-   - Propone una grilla logaritmica.
-   - Muestra el valor `grid_size` que puede copiarse al notebook de kernels.
+   - Propone y grafica una grilla logaritmica.
+   - Muestra el `grid_size` que puede copiarse al notebook de kernels.
 
 2. `Estimacion_Bandwidths.ipynb`
-   - Calcula bandwidths por `cv`, `scott` y `silverman`.
-   - Compara visualmente las tres alternativas.
-   - Muestra `selected_method` y `selected_bandwidth` para copiarlos al
-     notebook de kernels.
+   - Calcula bandwidths por kernel mediante validacion cruzada.
+   - Tambien muestra las referencias globales de Scott y Silverman.
+   - Grafica la KDE usando el bandwidth optimo de cada kernel.
+   - Muestra el diccionario `kernel_bandwidths` para copiarlo al notebook final.
 
 3. `Calculo_Kernels.ipynb`
-   - Usa el bandwidth y la grilla elegidos.
+   - Usa `DATA_PATH`, `GRID_SIZE` y `kernel_bandwidths`.
    - Evalua los seis kernels KDE.
-   - Valida que la metodo rapido sea numericamente cercana a la referencia.
-   - Muestra tablas resumen y graficas finales dentro del notebook.
+   - Valida que el metodo rapido sea numericamente cercano a la referencia.
+   - Muestra graficas comparativas y graficas individuales.
+   - Incluye una seccion de pruebas particulares donde puede cambiarse el
+     bandwidth de cada kernel sin alterar la evaluacion principal.
 
 Los notebooks no se comunican automaticamente. Los valores relevantes se
 copian manualmente cuando se quiera encadenar una evaluacion con otra.
 
-## Datos de prueba
+## Parametros principales
 
-Cada notebook tiene una variable:
+Cada notebook usa una ruta relativa editable:
 
 ```python
-USE_SYNTHETIC_DATA = False
+DATA_PATH = "../Datos/otu_data_converted.csv"
 ```
 
-Cambiarla a `True` permite probar el flujo con datos sinteticos pequenos.
+Para usar otro archivo, basta con reemplazar ese texto por otra ruta relativa.
+
+En los notebooks de grid y kernels, el tamano de grilla se define siempre con
+un valor explicito:
+
+```python
+GRID_SIZE = 1000
+```
+
+En `Calculo_Kernels.ipynb`, los bandwidths principales se configuran asi:
+
+```python
+kernel_bandwidths = {
+    "gaussian": 265.702434254,
+    "epanechnikov": 265.702434254,
+    "tophat": 265.702434254,
+    "exponential": 265.702434254,
+    "linear": 265.702434254,
+    "cosine": 265.702434254,
+}
+```
+
+Y las pruebas particulares se controlan con:
+
+```python
+test_kernel_bandwidths = {
+    "gaussian": kernel_bandwidths["gaussian"],
+    "epanechnikov": kernel_bandwidths["epanechnikov"],
+    "tophat": kernel_bandwidths["tophat"],
+    "exponential": kernel_bandwidths["exponential"],
+    "linear": kernel_bandwidths["linear"],
+    "cosine": kernel_bandwidths["cosine"],
+}
+```
 
 ## Kernels disponibles
 
@@ -60,8 +96,9 @@ Cambiarla a `True` permite probar el flujo con datos sinteticos pequenos.
 
 En la medicion local con los datos reales actuales:
 
-- Estimacion de bandwidth por validacion cruzada: ~18.4 s.
+- Estimacion de bandwidth por validacion cruzada para los seis kernels,
+  usando `CV_SUBSAMPLE = 1000`, `CV_FOLDS = 3` y `CV_BW_GRID = 8`: ~1.3 s.
 - Evaluacion final de los seis kernels con grilla de 1000 puntos: ~2.0 s.
 
-Estos tiempos pueden variar segun el equipo y la configuracion de cada
-notebook.
+Si se aumenta `CV_SUBSAMPLE`, `CV_FOLDS` o `CV_BW_GRID`, la estimacion de
+bandwidths sera mas fina, pero tambien mas lenta.
