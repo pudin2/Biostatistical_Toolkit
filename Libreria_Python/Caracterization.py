@@ -297,6 +297,7 @@ def _run_shapiro_test(values, alpha):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
+            warnings.simplefilter("ignore", category=UserWarning)
             stat, pval = shapiro(values)
 
         reject = bool(pval < alpha)
@@ -338,7 +339,10 @@ def _run_anderson_distribution_test(values, dist_code, alpha, prefix, null_label
         }
 
     try:
-        ad = anderson(values, dist=dist_code)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            warnings.simplefilter("ignore", category=UserWarning)
+            ad = anderson(values, dist=dist_code)
 
         alpha_pct = 100 * alpha
         levels = np.asarray(ad.significance_level, dtype=float)

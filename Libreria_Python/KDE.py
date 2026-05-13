@@ -63,6 +63,20 @@ def evaluate_grid(values, grid_size, bandwidth):
     return x_grid, grid_summary
 
 
+def show_dataframe(df):
+    try:
+        from IPython import get_ipython
+        from IPython.display import display as ipython_display
+
+        if get_ipython() is not None:
+            ipython_display(df)
+            return
+    except ImportError:
+        pass
+
+    print(df.to_string(index=False))
+
+
 def prepare_values(values):
     arr = np.asarray(values, dtype=float).ravel()
     arr = arr[np.isfinite(arr)]
@@ -564,10 +578,9 @@ def kde_from_loaded(
 
     x_grid, grid_summary = evaluate_grid(values, grid_size, common_bandwidth)
 
-    display(grid_summary)
-    display(bandwidth_summary)
-
     if verbose:
+        show_dataframe(grid_summary)
+        show_dataframe(bandwidth_summary)
         print(f"DataFrame analizado: {data_df_name}")
         print(f"Grid usado: {grid_size}")
         print(f"Bandwidth minimo permitido: {min_bandwidth}")

@@ -11,9 +11,11 @@ from sklearn.manifold import Isomap, MDS, TSNE
 try:
     import umap
     HAS_UMAP = True
-except ImportError:
+    UMAP_IMPORT_ERROR = None
+except Exception as exc:
     umap = None
     HAS_UMAP = False
+    UMAP_IMPORT_ERROR = exc
 
 
 def get_df_from_dfs(dfs, df_name):
@@ -198,7 +200,9 @@ def apply_embedding(
     if method == "umap":
         if not HAS_UMAP:
             raise ImportError(
-                "UMAP no está instalado. Instálalo con: pip install umap-learn"
+                "UMAP no esta disponible en este entorno. "
+                "Instala/repara umap-learn o usa otro embedding. "
+                f"Detalle: {UMAP_IMPORT_ERROR}"
             )
 
         max_components = min(n_components, n_features)
