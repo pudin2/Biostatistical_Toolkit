@@ -8,14 +8,9 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.decomposition import PCA, KernelPCA
 from sklearn.manifold import Isomap, MDS, TSNE
 
-try:
-    import umap
-    HAS_UMAP = True
-    UMAP_IMPORT_ERROR = None
-except Exception as exc:
-    umap = None
-    HAS_UMAP = False
-    UMAP_IMPORT_ERROR = exc
+umap = None
+HAS_UMAP = None
+UMAP_IMPORT_ERROR = None
 
 
 def get_df_from_dfs(dfs, df_name):
@@ -198,7 +193,20 @@ def apply_embedding(
         return X_embed, model
 
     if method == "umap":
-        if not HAS_UMAP:
+        global umap, HAS_UMAP, UMAP_IMPORT_ERROR
+
+        if HAS_UMAP is not True:
+            try:
+                import umap as _umap
+                umap = _umap
+                HAS_UMAP = True
+                UMAP_IMPORT_ERROR = None
+            except Exception as exc:
+                umap = None
+                HAS_UMAP = False
+                UMAP_IMPORT_ERROR = exc
+
+        if HAS_UMAP is not True:
             raise ImportError(
                 "UMAP no esta disponible en este entorno. "
                 "Instala/repara umap-learn o usa otro embedding. "

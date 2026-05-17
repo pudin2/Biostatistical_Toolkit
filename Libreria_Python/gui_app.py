@@ -19,6 +19,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except Exception:
+    Image = None
+    ImageTk = None
+    HAS_PIL = False
+
 from Load import load_dataframe_from_path
 from Caracterization import distribution_plots_from_loaded, normality_tests_from_loaded
 from KDE import kde_from_loaded
@@ -178,7 +186,7 @@ class FigureCapture:
 
 class ArtifactExporter:
     def __init__(self, run_dir):
-        self.run_dir = Path(run_dir)
+        self.run_dir = Path(run_dir).resolve()
         self.tables_dir = self.run_dir / "tables"
         self.arrays_dir = self.run_dir / "arrays"
         self.objects_dir = self.run_dir / "objects"
@@ -299,6 +307,14 @@ class MicrobiotaGUI(tk.Tk):
 
         self.dfs = {}
         self.results = {}
+        self.result_manifests = {}
+        self.result_run_dirs = {}
+        self.active_result_key = None
+        self.current_table_path = None
+        self.current_figure_path = None
+        self.figure_image_ref = None
+        self.visible_tables = {}
+        self.visible_figures = {}
         self.last_run_dir = None
         self.worker = None
         self.msg_queue = queue.Queue()
@@ -377,6 +393,7 @@ class MicrobiotaGUI(tk.Tk):
         self.result_tree.column("#0", width=180, stretch=True)
         self.result_tree.column("time", width=85, stretch=False)
         self.result_tree.grid(row=0, column=0, sticky="ew")
+        self.result_tree.bind("<<TreeviewSelect>>", self.on_result_selected)
 
         log_box = ttk.LabelFrame(sidebar, text="Log", padding=8)
         log_box.grid(row=5, column=0, sticky="nsew")
@@ -402,6 +419,7 @@ class MicrobiotaGUI(tk.Tk):
         self._build_kruskal_tab()
         self._build_mann_whitney_tab()
         self._build_dbscan_tab()
+        self._build_results_tab()
 
         self.status_var = tk.StringVar(value="Listo")
         ttk.Label(main, textvariable=self.status_var, style="Subtle.TLabel").grid(row=3, column=0, sticky="ew", pady=(10, 0))
@@ -453,6 +471,110 @@ class MicrobiotaGUI(tk.Tk):
         btn = ttk.Button(parent, text=label, style="Accent.TButton", command=command)
         btn.grid(row=row, column=0, sticky="ew", pady=(4, 0))
         return btn
+
+    def _build_results_tab(self):
+        self.results_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(self.results_tab, text="Resultados")
+        self.results_tab.grid_rowconfigure(1, weight=1)
+        self.results_tab.grid_columnconfigure(0, weight=1)
+
+        header = ttk.Frame(self.results_tab)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        header.grid_columnconfigure(0, weight=1)
+        self.results_title_var = tk.StringVar(value="Sin resultados cargados")
+        ttk.Label(header, textvariable=self.results_title_var, font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Button(header, text="Cargar manifest", command=self.load_manifest_file).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(header, text="Abrir carpeta", command=self.open_active_run_dir).grid(row=0, column=2, padx=(8, 0))
+
+        paned = ttk.PanedWindow(self.results_tab, orient="horizontal")
+        paned.grid(row=1, column=0, sticky="nsew")
+
+        left = ttk.Frame(paned, padding=(0, 0, 10, 0))
+        right = ttk.Frame(paned)
+        left.grid_rowconfigure(0, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+        paned.add(left, weight=1)
+        paned.add(right, weight=4)
+
+        lists = ttk.Notebook(left)
+        lists.grid(row=0, column=0, sticky="nsew")
+
+        table_list_frame = ttk.Frame(lists, padding=6)
+        table_list_frame.grid_rowconfigure(0, weight=1)
+        table_list_frame.grid_columnconfigure(0, weight=1)
+        lists.add(table_list_frame, text="Tablas")
+        self.table_list = ttk.Treeview(table_list_frame, columns=("rows", "cols"), show="tree headings", height=14)
+        self.table_list.heading("#0", text="Tabla")
+        self.table_list.heading("rows", text="Filas")
+        self.table_list.heading("cols", text="Cols")
+        self.table_list.column("#0", width=210, stretch=True)
+        self.table_list.column("rows", width=70, anchor="e", stretch=False)
+        self.table_list.column("cols", width=55, anchor="e", stretch=False)
+        self.table_list.grid(row=0, column=0, sticky="nsew")
+        self.table_list.bind("<<TreeviewSelect>>", self.on_table_selected)
+        table_scroll = ttk.Scrollbar(table_list_frame, orient="vertical", command=self.table_list.yview)
+        table_scroll.grid(row=0, column=1, sticky="ns")
+        self.table_list.configure(yscrollcommand=table_scroll.set)
+
+        figure_list_frame = ttk.Frame(lists, padding=6)
+        figure_list_frame.grid_rowconfigure(0, weight=1)
+        figure_list_frame.grid_columnconfigure(0, weight=1)
+        lists.add(figure_list_frame, text="Figuras")
+        self.figure_list = ttk.Treeview(figure_list_frame, show="tree", height=14)
+        self.figure_list.heading("#0", text="Figura")
+        self.figure_list.column("#0", width=280, stretch=True)
+        self.figure_list.grid(row=0, column=0, sticky="nsew")
+        self.figure_list.bind("<<TreeviewSelect>>", self.on_figure_selected)
+        fig_scroll = ttk.Scrollbar(figure_list_frame, orient="vertical", command=self.figure_list.yview)
+        fig_scroll.grid(row=0, column=1, sticky="ns")
+        self.figure_list.configure(yscrollcommand=fig_scroll.set)
+
+        list_buttons = ttk.Frame(left)
+        list_buttons.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        list_buttons.grid_columnconfigure((0, 1), weight=1)
+        ttk.Button(list_buttons, text="Abrir seleccionado", command=self.open_selected_result_file).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(list_buttons, text="Actualizar vista", command=self.refresh_active_result_view).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+
+        self.preview_notebook = ttk.Notebook(right)
+        self.preview_notebook.grid(row=0, column=0, sticky="nsew")
+
+        table_preview_frame = ttk.Frame(self.preview_notebook, padding=8)
+        table_preview_frame.grid_rowconfigure(1, weight=1)
+        table_preview_frame.grid_columnconfigure(0, weight=1)
+        self.preview_notebook.add(table_preview_frame, text="Vista de tabla")
+        self.table_info_var = tk.StringVar(value="Selecciona una tabla para verla.")
+        ttk.Label(table_preview_frame, textvariable=self.table_info_var, style="Subtle.TLabel").grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        table_grid = ttk.Frame(table_preview_frame)
+        table_grid.grid(row=1, column=0, sticky="nsew")
+        table_grid.grid_rowconfigure(0, weight=1)
+        table_grid.grid_columnconfigure(0, weight=1)
+        self.table_preview = ttk.Treeview(table_grid, show="headings")
+        self.table_preview.grid(row=0, column=0, sticky="nsew")
+        table_y = ttk.Scrollbar(table_grid, orient="vertical", command=self.table_preview.yview)
+        table_x = ttk.Scrollbar(table_grid, orient="horizontal", command=self.table_preview.xview)
+        table_y.grid(row=0, column=1, sticky="ns")
+        table_x.grid(row=1, column=0, sticky="ew")
+        self.table_preview.configure(yscrollcommand=table_y.set, xscrollcommand=table_x.set)
+
+        figure_preview_frame = ttk.Frame(self.preview_notebook, padding=8)
+        figure_preview_frame.grid_rowconfigure(1, weight=1)
+        figure_preview_frame.grid_columnconfigure(0, weight=1)
+        self.preview_notebook.add(figure_preview_frame, text="Vista de figura")
+        self.figure_info_var = tk.StringVar(value="Selecciona una figura para verla.")
+        ttk.Label(figure_preview_frame, textvariable=self.figure_info_var, style="Subtle.TLabel").grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        figure_grid = ttk.Frame(figure_preview_frame)
+        figure_grid.grid(row=1, column=0, sticky="nsew")
+        figure_grid.grid_rowconfigure(0, weight=1)
+        figure_grid.grid_columnconfigure(0, weight=1)
+        self.figure_canvas = tk.Canvas(figure_grid, bg="#ffffff", highlightthickness=0)
+        self.figure_canvas.grid(row=0, column=0, sticky="nsew")
+        fig_y = ttk.Scrollbar(figure_grid, orient="vertical", command=self.figure_canvas.yview)
+        fig_x = ttk.Scrollbar(figure_grid, orient="horizontal", command=self.figure_canvas.xview)
+        fig_y.grid(row=0, column=1, sticky="ns")
+        fig_x.grid(row=1, column=0, sticky="ew")
+        self.figure_canvas.configure(yscrollcommand=fig_y.set, xscrollcommand=fig_x.set)
 
     def _build_characterization_tab(self):
         group = "characterization"
@@ -647,6 +769,243 @@ class MicrobiotaGUI(tk.Tk):
             df = self.dfs.get(dataset_name)
             combo.configure(values=[] if df is None else list(map(str, df.columns)))
 
+    def load_manifest_file(self):
+        path = filedialog.askopenfilename(
+            title="Cargar manifest de una corrida",
+            initialdir=self.output_dir_var.get() or str(DEFAULT_OUTPUT_DIR),
+            filetypes=[("Manifest JSON", "manifest.json"), ("JSON", "*.json"), ("Todos", "*.*")],
+        )
+        if not path:
+            return
+        manifest_path = Path(path)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"No se pudo leer el manifest:\n{exc}")
+            return
+
+        analysis = manifest.get("analysis", "resultado")
+        key = unique_name(f"{analysis}_{_dt.datetime.now().strftime('%H%M%S')}", self.result_manifests)
+        self.result_manifests[key] = manifest
+        self.result_run_dirs[key] = manifest_path.parent
+        self.results[key] = None
+        self.result_tree.insert("", "end", iid=key, text=key, values=(_dt.datetime.now().strftime("%H:%M:%S"),))
+        self.result_tree.selection_set(key)
+        self.result_tree.focus(key)
+        self.show_result_key(key)
+        self._log(f"Manifest cargado: {manifest_path}")
+
+    def on_result_selected(self, _event=None):
+        selected = self.result_tree.selection()
+        if not selected:
+            return
+        self.show_result_key(selected[0])
+
+    def show_result_key(self, key):
+        manifest = self.result_manifests.get(key)
+        if not manifest:
+            return
+
+        self.active_result_key = key
+        self.visible_tables = {}
+        self.visible_figures = {}
+        for item in self.table_list.get_children():
+            self.table_list.delete(item)
+        for item in self.figure_list.get_children():
+            self.figure_list.delete(item)
+
+        run_dir = self.result_run_dirs.get(key)
+        analysis = manifest.get("analysis", key)
+        created = manifest.get("created_at", "")
+        self.results_title_var.set(f"{analysis} | {created} | {run_dir}")
+
+        for i, table in enumerate(manifest.get("tables", []), start=1):
+            iid = f"table_{i}"
+            self.visible_tables[iid] = table
+            name = table.get("name") or Path(table.get("path", "")).name
+            rows = table.get("rows", "")
+            cols = table.get("columns", "")
+            self.table_list.insert("", "end", iid=iid, text=name, values=(rows, cols))
+
+        for i, figure_path in enumerate(manifest.get("figures", []), start=1):
+            iid = f"figure_{i}"
+            path = self._artifact_path(figure_path)
+            self.visible_figures[iid] = path
+            self.figure_list.insert("", "end", iid=iid, text=path.name)
+
+        table_items = self.table_list.get_children()
+        figure_items = self.figure_list.get_children()
+        if table_items:
+            self.table_list.selection_set(table_items[0])
+            self.table_list.focus(table_items[0])
+            self.show_table_preview(self.visible_tables[table_items[0]])
+        else:
+            self.clear_table_preview("Esta corrida no tiene tablas exportadas.")
+
+        if figure_items:
+            self.figure_list.selection_set(figure_items[0])
+            self.figure_list.focus(figure_items[0])
+            self.show_figure_preview(self.visible_figures[figure_items[0]])
+        else:
+            self.clear_figure_preview("Esta corrida no tiene figuras exportadas.")
+
+        self.notebook.select(self.results_tab)
+
+    def refresh_active_result_view(self):
+        if self.active_result_key:
+            self.show_result_key(self.active_result_key)
+
+    def on_table_selected(self, _event=None):
+        selected = self.table_list.selection()
+        if not selected:
+            return
+        table = self.visible_tables.get(selected[0])
+        if table:
+            self.show_table_preview(table)
+
+    def on_figure_selected(self, _event=None):
+        selected = self.figure_list.selection()
+        if not selected:
+            return
+        path = self.visible_figures.get(selected[0])
+        if path:
+            self.show_figure_preview(path)
+
+    def _artifact_path(self, path_text):
+        path = Path(path_text)
+        if path.is_absolute():
+            return path
+        if path.exists():
+            return path
+        run_dir = self.result_run_dirs.get(self.active_result_key)
+        if run_dir:
+            return run_dir / path
+        return path
+
+    def clear_table_preview(self, message):
+        for item in self.table_preview.get_children():
+            self.table_preview.delete(item)
+        self.table_preview["columns"] = []
+        self.table_info_var.set(message)
+        self.current_table_path = None
+
+    def show_table_preview(self, table):
+        path = self._artifact_path(table.get("path", ""))
+        self.current_table_path = path
+        if not path.exists():
+            self.clear_table_preview(f"No existe el archivo: {path}")
+            return
+        try:
+            df = pd.read_csv(path, nrows=500)
+        except Exception as exc:
+            self.clear_table_preview(f"No se pudo leer la tabla: {exc}")
+            return
+
+        for item in self.table_preview.get_children():
+            self.table_preview.delete(item)
+
+        max_cols = min(len(df.columns), 80)
+        column_ids = [f"c{i}" for i in range(max_cols)]
+        self.table_preview["columns"] = column_ids
+        for i, col in enumerate(df.columns[:max_cols]):
+            label = str(col)
+            width = max(90, min(220, 8 * len(label) + 30))
+            self.table_preview.heading(column_ids[i], text=label)
+            self.table_preview.column(column_ids[i], width=width, stretch=False)
+
+        for _, row in df.iloc[:, :max_cols].iterrows():
+            values = []
+            for value in row.tolist():
+                if pd.isna(value):
+                    values.append("")
+                else:
+                    text = str(value)
+                    values.append(text[:160])
+            self.table_preview.insert("", "end", values=values)
+
+        rows = table.get("rows", "?")
+        cols = table.get("columns", "?")
+        rows_count = int(rows) if str(rows).isdigit() else None
+        cols_count = int(cols) if str(cols).isdigit() else None
+        suffix = ""
+        if rows_count is not None and rows_count > 500:
+            suffix += " | mostrando primeras 500 filas"
+        if cols_count is not None and cols_count > max_cols:
+            suffix += f" | mostrando primeras {max_cols} columnas"
+        self.table_info_var.set(f"{table.get('name', path.name)} | {rows} x {cols} | {path}{suffix}")
+        self.preview_notebook.select(0)
+
+    def clear_figure_preview(self, message):
+        self.figure_canvas.delete("all")
+        self.figure_canvas.configure(scrollregion=(0, 0, 0, 0))
+        self.figure_info_var.set(message)
+        self.current_figure_path = None
+        self.figure_image_ref = None
+
+    def show_figure_preview(self, path):
+        path = Path(path)
+        self.current_figure_path = path
+        self.figure_canvas.delete("all")
+        if not path.exists():
+            self.clear_figure_preview(f"No existe la figura: {path}")
+            return
+
+        try:
+            if HAS_PIL:
+                image = Image.open(path)
+                self.figure_canvas.update_idletasks()
+                max_w = max(760, self.figure_canvas.winfo_width() - 30)
+                max_h = max(520, self.figure_canvas.winfo_height() - 30)
+                ratio = min(max_w / image.width, max_h / image.height, 1.0)
+                size = (max(1, int(image.width * ratio)), max(1, int(image.height * ratio)))
+                if size != image.size:
+                    image = image.resize(size, Image.LANCZOS)
+                self.figure_image_ref = ImageTk.PhotoImage(image)
+            else:
+                self.figure_image_ref = tk.PhotoImage(file=str(path))
+                size = (self.figure_image_ref.width(), self.figure_image_ref.height())
+        except Exception as exc:
+            self.clear_figure_preview(f"No se pudo abrir la figura: {exc}")
+            return
+
+        self.figure_canvas.create_image(12, 12, anchor="nw", image=self.figure_image_ref)
+        self.figure_canvas.configure(scrollregion=(0, 0, size[0] + 24, size[1] + 24))
+        self.figure_info_var.set(f"{path.name} | {path}")
+        self.preview_notebook.select(1)
+
+    def open_selected_result_file(self):
+        current_preview = self.preview_notebook.index("current")
+        path = self.current_figure_path if current_preview == 1 else self.current_table_path
+        if path is None:
+            selected_fig = self.figure_list.selection()
+            selected_table = self.table_list.selection()
+            if selected_fig:
+                path = self.visible_figures.get(selected_fig[0])
+            elif selected_table:
+                table = self.visible_tables.get(selected_table[0], {})
+                path = self._artifact_path(table.get("path", ""))
+        if path is None:
+            messagebox.showinfo(APP_TITLE, "Selecciona una tabla o figura.")
+            return
+        try:
+            os.startfile(path)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"No se pudo abrir el archivo:\n{exc}")
+
+    def open_active_run_dir(self):
+        path = None
+        if self.active_result_key:
+            path = self.result_run_dirs.get(self.active_result_key)
+        if path is None:
+            path = self.last_run_dir
+        if path is None:
+            path = Path(self.output_dir_var.get()).expanduser()
+        try:
+            Path(path).mkdir(parents=True, exist_ok=True)
+            os.startfile(path)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"No se pudo abrir la carpeta:\n{exc}")
+
     def choose_output_dir(self):
         path = filedialog.askdirectory(title="Carpeta de salida", initialdir=self.output_dir_var.get() or str(DEFAULT_OUTPUT_DIR))
         if path:
@@ -836,15 +1195,20 @@ class MicrobiotaGUI(tk.Tk):
                 kind = message[0]
                 if kind == "done":
                     _, analysis, result, run_dir, manifest, log_text = message
-                    key = f"{analysis}_{_dt.datetime.now().strftime('%H%M%S')}"
+                    key = unique_name(f"{analysis}_{_dt.datetime.now().strftime('%H%M%S')}", self.result_manifests)
                     self.results[key] = result
+                    self.result_manifests[key] = manifest
+                    self.result_run_dirs[key] = Path(run_dir)
                     self.last_run_dir = Path(run_dir)
-                    self.result_tree.insert("", "end", text=key, values=(_dt.datetime.now().strftime("%H:%M:%S"),))
+                    self.result_tree.insert("", "end", iid=key, text=key, values=(_dt.datetime.now().strftime("%H:%M:%S"),))
+                    self.result_tree.selection_set(key)
+                    self.result_tree.focus(key)
                     if log_text:
                         self._log(log_text.rstrip())
                     self._log(f"Terminado: {analysis}")
                     self._log(f"Salida: {run_dir}")
                     self._log(f"Tablas: {len(manifest.get('tables', []))} | Arrays: {len(manifest.get('arrays', []))} | Figuras: {len(manifest.get('figures', []))}")
+                    self.show_result_key(key)
                     self.status_var.set(f"Listo. Ultima salida: {run_dir}")
                 elif kind == "error":
                     _, analysis, trace = message
