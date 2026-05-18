@@ -1,0 +1,11 @@
+{
+  "df_name": "anthro_data",
+  "numeric_cols": [
+    "socioeconomic"
+  ],
+  "analysis_mode": "both",
+  "value_mode": "both",
+  "test_method": "both",
+  "alpha": 0.05,
+  "verbose": true
+}

@@ -5,7 +5,6 @@ import json
 import os
 import queue
 import re
-import sys
 import threading
 import traceback
 from pathlib import Path
@@ -146,6 +145,7 @@ class FigureCapture:
         self.counter = 0
         self._old_show = None
 
+
     def __enter__(self):
         plt.switch_backend("Agg")
         fig = plt.figure(figsize=(0.1, 0.1))
@@ -154,10 +154,12 @@ class FigureCapture:
         plt.show = self.show
         return self
 
+
     def __exit__(self, exc_type, exc, tb):
         self.save_open_figures()
         plt.show = self._old_show
         plt.close("all")
+
 
     def _title_for(self, fig):
         if getattr(fig, "_suptitle", None) is not None:
@@ -170,6 +172,7 @@ class FigureCapture:
                 return text
         return "figure"
 
+
     def save_open_figures(self):
         for num in list(plt.get_fignums()):
             fig = plt.figure(num)
@@ -180,11 +183,13 @@ class FigureCapture:
             self.saved.append(path)
             plt.close(fig)
 
+
     def show(self, *args, **kwargs):
         self.save_open_figures()
 
 
 class ArtifactExporter:
+
     def __init__(self, run_dir):
         self.run_dir = Path(run_dir).resolve()
         self.tables_dir = self.run_dir / "tables"
@@ -196,10 +201,12 @@ class ArtifactExporter:
         self.manifest = {"tables": [], "arrays": [], "objects": []}
         self.excel_tables = []
 
+
     def export(self, obj, prefix="result"):
         self._export_obj(obj, sanitize_name(prefix, "result"))
         self._write_excel_book()
         return self.manifest
+
 
     def _export_obj(self, obj, prefix):
         if isinstance(obj, pd.DataFrame):
@@ -246,11 +253,13 @@ class ArtifactExporter:
 
         self._write_json(prefix, json_safe(obj))
 
+
     def _write_json(self, name, payload):
         path = self.objects_dir / f"{sanitize_name(name)}.json"
         with path.open("w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
         self.manifest["objects"].append({"name": name, "path": str(path)})
+
 
     def _write_excel_book(self):
         if not self.excel_tables:
@@ -275,6 +284,7 @@ class ArtifactExporter:
 
 
 class ScrollFrame(ttk.Frame):
+    
     def __init__(self, master):
         super().__init__(master)
         self.canvas = tk.Canvas(self, highlightthickness=0)
@@ -291,14 +301,17 @@ class ScrollFrame(ttk.Frame):
         self.inner.bind("<Configure>", self._on_inner_configure)
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
+
     def _on_inner_configure(self, _event):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
 
     def _on_canvas_configure(self, event):
         self.canvas.itemconfigure(self.window_id, width=event.width)
 
 
 class MicrobiotaGUI(tk.Tk):
+
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
@@ -321,10 +334,16 @@ class MicrobiotaGUI(tk.Tk):
         self.inputs = {}
         self.df_combos = []
         self.column_combos = []
+        self.numeric_column_dropdowns = []
+        self.categorical_column_dropdowns = []
+        self.group_value_dropdowns = []
+        self.loading_result_view = False
+        self.results_lists_notebook = None
 
         self._configure_style()
         self._build_ui()
         self.after(150, self._poll_queue)
+
 
     def _configure_style(self):
         style = ttk.Style(self)
@@ -340,6 +359,7 @@ class MicrobiotaGUI(tk.Tk):
         style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
         style.configure("Treeview", rowheight=24)
+
 
     def _build_ui(self):
         root = ttk.Frame(self)
@@ -424,6 +444,7 @@ class MicrobiotaGUI(tk.Tk):
         self.status_var = tk.StringVar(value="Listo")
         ttk.Label(main, textvariable=self.status_var, style="Subtle.TLabel").grid(row=3, column=0, sticky="ew", pady=(10, 0))
 
+
     def _new_tab(self, title):
         frame = ScrollFrame(self.notebook)
         self.notebook.add(frame, text=title)
@@ -431,12 +452,14 @@ class MicrobiotaGUI(tk.Tk):
         body.grid_columnconfigure(0, weight=1)
         return body
 
+
     def _section(self, parent, title, row):
         box = ttk.LabelFrame(parent, text=title, padding=12)
         box.grid(row=row, column=0, sticky="ew", pady=(0, 12))
         box.grid_columnconfigure(1, weight=1)
         box.grid_columnconfigure(3, weight=1)
         return box
+
 
     def _add_entry(self, box, group, key, label, default="", row=0, col=0, width=22):
         ttk.Label(box, text=label).grid(row=row, column=col, sticky="w", padx=(0, 8), pady=4)
@@ -446,19 +469,441 @@ class MicrobiotaGUI(tk.Tk):
         self.inputs.setdefault(group, {})[key] = var
         return entry
 
+
+    def _add_numeric_columns_dropdown(
+        self,
+        box,
+        group,
+        key,
+        label,
+        dataset_key,
+        row=0,
+        col=0,
+        width=42
+    ):
+        ttk.Label(box, text=label).grid(
+            row=row,
+            column=col,
+            sticky="w",
+            padx=(0, 8),
+            pady=4
+        )
+
+        numeric_var = tk.StringVar(value="")
+
+        combo = ttk.Combobox(
+            box,
+            textvariable=numeric_var,
+            values=[],
+            width=width,
+            state="normal"
+        )
+
+        combo.grid(
+            row=row,
+            column=col + 1,
+            sticky="ew",
+            pady=4,
+            padx=(0, 16)
+        )
+
+        self.inputs.setdefault(group, {})[key] = numeric_var
+
+        selector = {
+            "group": group,
+            "key": key,
+            "dataset_key": dataset_key,
+            "combo": combo,
+            "var": numeric_var,
+            "selected_text": ""
+        }
+
+        self.numeric_column_dropdowns.append(selector)
+
+        combo.bind("<<ComboboxSelected>>", self.on_numeric_column_dropdown_selected)
+        combo.bind("<KeyRelease>", self.on_numeric_columns_text_edited)
+        combo.bind("<FocusOut>", self.on_numeric_columns_text_edited)
+
+        return combo
+
+
+    def get_numeric_columns_for_dataset(self, dataset_name):
+        df = self.dfs.get(dataset_name)
+
+        if df is None:
+            return []
+
+        numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
+
+        if numeric_cols:
+            return [str(col) for col in numeric_cols]
+
+        detected_cols = []
+
+        for col in df.columns:
+            converted = pd.to_numeric(df[col], errors="coerce")
+
+            if converted.notna().sum() > 0:
+                detected_cols.append(str(col))
+
+        return detected_cols
+
+
+    def refresh_numeric_column_dropdowns(self):
+        for selector in self.numeric_column_dropdowns:
+            group = selector["group"]
+            dataset_key = selector["dataset_key"]
+            combo = selector["combo"]
+            numeric_var = selector["var"]
+
+            dataset_var = self.inputs.get(group, {}).get(dataset_key)
+
+            if dataset_var is None:
+                columns = []
+            else:
+                dataset_name = dataset_var.get()
+                columns = self.get_numeric_columns_for_dataset(dataset_name)
+
+            current_selected = split_list(numeric_var.get()) or []
+            valid_selected = [col for col in current_selected if col in columns]
+
+            selected_text = ", ".join(valid_selected)
+
+            numeric_var.set(selected_text)
+            selector["selected_text"] = selected_text
+            combo.configure(values=columns)
+
+
+    def on_numeric_columns_text_edited(self, event):
+        combo = event.widget
+
+        for selector in self.numeric_column_dropdowns:
+            if selector["combo"] == combo:
+                selector["selected_text"] = selector["var"].get().strip()
+                break
+
+
+    def on_numeric_column_dropdown_selected(self, event):
+        combo = event.widget
+
+        for selector in self.numeric_column_dropdowns:
+            if selector["combo"] == combo:
+                selected_column = selector["var"].get().strip()
+                previous_text = selector.get("selected_text", "")
+                current_selected = split_list(previous_text) or []
+
+                if selected_column:
+                    if selected_column not in current_selected:
+                        current_selected.append(selected_column)
+
+                    selected_text = ", ".join(current_selected)
+                    selector["var"].set(selected_text)
+                    selector["selected_text"] = selected_text
+
+                break
+
+
+    def _add_categorical_columns_dropdown(
+        self,
+        box,
+        group,
+        key,
+        label,
+        dataset_key,
+        row=0,
+        col=0,
+        width=42
+    ):
+        ttk.Label(box, text=label).grid(
+            row=row,
+            column=col,
+            sticky="w",
+            padx=(0, 8),
+            pady=4
+        )
+
+        categorical_var = tk.StringVar(value="")
+
+        combo = ttk.Combobox(
+            box,
+            textvariable=categorical_var,
+            values=[],
+            width=width,
+            state="normal"
+        )
+
+        combo.grid(
+            row=row,
+            column=col + 1,
+            sticky="ew",
+            pady=4,
+            padx=(0, 16)
+        )
+
+        self.inputs.setdefault(group, {})[key] = categorical_var
+
+        selector = {
+            "group": group,
+            "key": key,
+            "dataset_key": dataset_key,
+            "combo": combo,
+            "var": categorical_var,
+            "selected_text": ""
+        }
+
+        self.categorical_column_dropdowns.append(selector)
+
+        combo.bind("<<ComboboxSelected>>", self.on_categorical_column_dropdown_selected)
+        combo.bind("<KeyRelease>", self.on_categorical_columns_text_edited)
+        combo.bind("<FocusOut>", self.on_categorical_columns_text_edited)
+
+        return combo
+
+
+    def get_categorical_columns_for_dataset(self, dataset_name):
+        df = self.dfs.get(dataset_name)
+
+        if df is None:
+            return []
+
+        categorical_cols = []
+
+        for col in df.columns:
+            series = df[col]
+
+            if pd.api.types.is_numeric_dtype(series):
+                continue
+
+            categorical_cols.append(str(col))
+
+        return categorical_cols
+
+
+    def refresh_categorical_column_dropdowns(self):
+        for selector in self.categorical_column_dropdowns:
+            group = selector["group"]
+            dataset_key = selector["dataset_key"]
+            combo = selector["combo"]
+            categorical_var = selector["var"]
+
+            dataset_var = self.inputs.get(group, {}).get(dataset_key)
+
+            if dataset_var is None:
+                columns = []
+            else:
+                dataset_name = dataset_var.get()
+                columns = self.get_categorical_columns_for_dataset(dataset_name)
+
+            current_selected = split_list(categorical_var.get()) or []
+            valid_selected = [col for col in current_selected if col in columns]
+
+            selected_text = ", ".join(valid_selected)
+
+            categorical_var.set(selected_text)
+            selector["selected_text"] = selected_text
+            combo.configure(values=columns)
+
+
+    def on_categorical_columns_text_edited(self, event):
+        combo = event.widget
+
+        for selector in self.categorical_column_dropdowns:
+            if selector["combo"] == combo:
+                selector["selected_text"] = selector["var"].get().strip()
+                break
+
+
+    def on_categorical_column_dropdown_selected(self, event):
+        combo = event.widget
+
+        for selector in self.categorical_column_dropdowns:
+            if selector["combo"] == combo:
+                selected_column = selector["var"].get().strip()
+                previous_text = selector.get("selected_text", "")
+                current_selected = split_list(previous_text) or []
+
+                if selected_column:
+                    if selected_column not in current_selected:
+                        current_selected.append(selected_column)
+
+                    selected_text = ", ".join(current_selected)
+                    selector["var"].set(selected_text)
+                    selector["selected_text"] = selected_text
+
+                break
+
+
+    def _add_group_values_dropdown(
+        self,
+        box,
+        group,
+        key,
+        label,
+        dataset_key,
+        column_key,
+        row=0,
+        col=0,
+        width=42
+    ):
+        ttk.Label(box, text=label).grid(
+            row=row,
+            column=col,
+            sticky="w",
+            padx=(0, 8),
+            pady=4
+        )
+
+        value_var = tk.StringVar(value="")
+
+        combo = ttk.Combobox(
+            box,
+            textvariable=value_var,
+            values=[],
+            width=width,
+            state="normal"
+        )
+
+        combo.grid(
+            row=row,
+            column=col + 1,
+            sticky="ew",
+            pady=4,
+            padx=(0, 16)
+        )
+
+        self.inputs.setdefault(group, {})[key] = value_var
+
+        selector = {
+            "group": group,
+            "key": key,
+            "dataset_key": dataset_key,
+            "column_key": column_key,
+            "combo": combo,
+            "var": value_var,
+            "selected_text": ""
+        }
+
+        self.group_value_dropdowns.append(selector)
+
+        combo.bind("<<ComboboxSelected>>", self.on_group_value_dropdown_selected)
+        combo.bind("<KeyRelease>", self.on_group_values_text_edited)
+        combo.bind("<FocusOut>", self.on_group_values_text_edited)
+
+        return combo
+
+
+    def get_unique_values_for_column(self, dataset_name, column_name):
+        df = self.dfs.get(dataset_name)
+
+        if df is None:
+            return []
+
+        if not column_name:
+            return []
+
+        if column_name not in df.columns:
+            return []
+
+        values = df[column_name].dropna()
+
+        result = []
+
+        for value in pd.unique(values):
+            text_value = str(value).strip()
+
+            if text_value:
+                result.append(text_value)
+
+        result = sorted(result, key=lambda item: item.lower())
+
+        return result
+
+
+    def refresh_group_value_dropdowns(self):
+        for selector in self.group_value_dropdowns:
+            group = selector["group"]
+            dataset_key = selector["dataset_key"]
+            column_key = selector["column_key"]
+            combo = selector["combo"]
+            value_var = selector["var"]
+
+            dataset_var = self.inputs.get(group, {}).get(dataset_key)
+            column_var = self.inputs.get(group, {}).get(column_key)
+
+            if dataset_var is None or column_var is None:
+                values = []
+            else:
+                dataset_name = dataset_var.get()
+                column_name = column_var.get()
+                values = self.get_unique_values_for_column(dataset_name, column_name)
+
+            current_selected = split_list(value_var.get()) or []
+            valid_selected = [item for item in current_selected if item in values]
+
+            selected_text = ", ".join(valid_selected)
+
+            value_var.set(selected_text)
+            selector["selected_text"] = selected_text
+            combo.configure(values=values)
+
+
+    def on_group_values_text_edited(self, event):
+        combo = event.widget
+
+        for selector in self.group_value_dropdowns:
+            if selector["combo"] == combo:
+                selector["selected_text"] = selector["var"].get().strip()
+                break
+
+
+    def on_group_value_dropdown_selected(self, event):
+        combo = event.widget
+
+        for selector in self.group_value_dropdowns:
+            if selector["combo"] == combo:
+                selected_value = selector["var"].get().strip()
+                previous_text = selector.get("selected_text", "")
+                current_selected = split_list(previous_text) or []
+
+                if selected_value:
+                    if selected_value not in current_selected:
+                        current_selected.append(selected_value)
+
+                    selected_text = ", ".join(current_selected)
+                    selector["var"].set(selected_text)
+                    selector["selected_text"] = selected_text
+
+                break
+
+
     def _add_combo(self, box, group, key, label, values, default="", row=0, col=0, width=22, dataset_combo=False, column_for=None):
         ttk.Label(box, text=label).grid(row=row, column=col, sticky="w", padx=(0, 8), pady=4)
+
         var = tk.StringVar(value=default)
-        combo = ttk.Combobox(box, textvariable=var, values=values, width=width)
+
+        combo = ttk.Combobox(
+            box,
+            textvariable=var,
+            values=values,
+            width=width
+        )
+
         combo.grid(row=row, column=col + 1, sticky="ew", pady=4, padx=(0, 16))
+
         self.inputs.setdefault(group, {})[key] = var
+
         if dataset_combo:
             self.df_combos.append(combo)
-            combo.bind("<<ComboboxSelected>>", lambda _event: self.refresh_columns())
-            combo.bind("<FocusOut>", lambda _event: self.refresh_columns())
+            combo.bind("<<ComboboxSelected>>", lambda _event: self.refresh_columns(), add="+")
+            combo.bind("<FocusOut>", lambda _event: self.refresh_columns(), add="+")
+
         if column_for:
             self.column_combos.append((combo, column_for))
+            combo.bind("<<ComboboxSelected>>", lambda _event: self.refresh_group_value_dropdowns(), add="+")
+            combo.bind("<FocusOut>", lambda _event: self.refresh_group_value_dropdowns(), add="+")
+
         return combo
+
 
     def _add_check(self, box, group, key, label, default=True, row=0, col=0):
         var = tk.BooleanVar(value=default)
@@ -467,10 +912,12 @@ class MicrobiotaGUI(tk.Tk):
         self.inputs.setdefault(group, {})[key] = var
         return check
 
+
     def _run_button(self, parent, row, label, command):
         btn = ttk.Button(parent, text=label, style="Accent.TButton", command=command)
         btn.grid(row=row, column=0, sticky="ew", pady=(4, 0))
         return btn
+
 
     def _build_results_tab(self):
         self.results_tab = ttk.Frame(self.notebook, padding=10)
@@ -498,14 +945,23 @@ class MicrobiotaGUI(tk.Tk):
         paned.add(left, weight=1)
         paned.add(right, weight=4)
 
-        lists = ttk.Notebook(left)
-        lists.grid(row=0, column=0, sticky="nsew")
+        self.results_lists_notebook = ttk.Notebook(left)
+        self.results_lists_notebook.grid(row=0, column=0, sticky="nsew")
+        self.results_lists_notebook.bind("<<NotebookTabChanged>>", self.on_result_list_tab_changed)
+
+        lists = self.results_lists_notebook
 
         table_list_frame = ttk.Frame(lists, padding=6)
         table_list_frame.grid_rowconfigure(0, weight=1)
         table_list_frame.grid_columnconfigure(0, weight=1)
         lists.add(table_list_frame, text="Tablas")
-        self.table_list = ttk.Treeview(table_list_frame, columns=("rows", "cols"), show="tree headings", height=14)
+        self.table_list = ttk.Treeview(
+            table_list_frame,
+            columns=("rows", "cols"),
+            show="tree headings",
+            height=14,
+            selectmode="browse"
+        )
         self.table_list.heading("#0", text="Tabla")
         self.table_list.heading("rows", text="Filas")
         self.table_list.heading("cols", text="Cols")
@@ -522,7 +978,12 @@ class MicrobiotaGUI(tk.Tk):
         figure_list_frame.grid_rowconfigure(0, weight=1)
         figure_list_frame.grid_columnconfigure(0, weight=1)
         lists.add(figure_list_frame, text="Figuras")
-        self.figure_list = ttk.Treeview(figure_list_frame, show="tree", height=14)
+        self.figure_list = ttk.Treeview(
+            figure_list_frame,
+            show="tree",
+            height=14,
+            selectmode="browse"
+        )
         self.figure_list.heading("#0", text="Figura")
         self.figure_list.column("#0", width=280, stretch=True)
         self.figure_list.grid(row=0, column=0, sticky="nsew")
@@ -576,116 +1037,751 @@ class MicrobiotaGUI(tk.Tk):
         fig_x.grid(row=1, column=0, sticky="ew")
         self.figure_canvas.configure(yscrollcommand=fig_y.set, xscrollcommand=fig_x.set)
 
+
     def _build_characterization_tab(self):
         group = "characterization"
         tab = self._new_tab("Caracterizacion")
         box = self._section(tab, "Parametros", 0)
-        self._add_combo(box, group, "df_name", "Dataset", [], "anthro_data", 0, 0, dataset_combo=True)
-        self._add_combo(box, group, "analysis_mode", "Modo", ["by_column", "full_matrix", "both"], "both", 0, 2)
-        self._add_entry(box, group, "numeric_cols", "Columnas numericas", "", 1, 0)
-        self._add_entry(box, group, "bins", "Bins", "80", 1, 2)
-        self._add_check(box, group, "plot_positive_hist", "Graficar histograma X > 0", True, 2, 0)
-        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 2, 2)
+
+        self._add_combo(
+            box,
+            group,
+            "df_name",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "analysis_mode",
+            "Modo",
+            ["by_column", "full_matrix", "both"],
+            "both",
+            0,
+            2
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "numeric_cols",
+            "Columnas numéricas",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "bins",
+            "Bins",
+            "80",
+            1,
+            2
+        )
+
+        self._add_check(
+            box,
+            group,
+            "plot_positive_hist",
+            "Graficar solo valores positivos",
+            True,
+            3,
+            0
+        )
+
+        self._add_check(
+            box,
+            group,
+            "verbose",
+            "Mostrar resumen en log",
+            True,
+            3,
+            2
+        )
+
         self._run_button(tab, 1, "Ejecutar caracterizacion", lambda: self.run_analysis("characterization"))
+
 
     def _build_normality_tab(self):
         group = "normality"
         tab = self._new_tab("Normalidad")
         box = self._section(tab, "Parametros", 0)
-        self._add_combo(box, group, "df_name", "Dataset", [], "anthro_data", 0, 0, dataset_combo=True)
-        self._add_combo(box, group, "analysis_mode", "Modo", ["by_column", "full_matrix", "both"], "both", 0, 2)
-        self._add_entry(box, group, "numeric_cols", "Columnas numericas", "", 1, 0)
-        self._add_combo(box, group, "value_mode", "Valores", ["all", "positive", "both"], "both", 1, 2)
-        self._add_combo(box, group, "test_method", "Prueba", ["shapiro", "anderson", "both"], "both", 2, 0)
-        self._add_entry(box, group, "alpha", "Alpha", "0.0003", 2, 2)
-        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 3, 0)
+
+        self._add_combo(
+            box,
+            group,
+            "df_name",
+            "Dataset",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "analysis_mode",
+            "Modo",
+            ["by_column", "full_matrix", "both"],
+            "both",
+            0,
+            2
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "numeric_cols",
+            "Columnas numéricas",
+            dataset_key="df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "value_mode",
+            "Valores",
+            ["all", "positive", "both"],
+            "both",
+            1,
+            2
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "test_method",
+            "Prueba",
+            ["shapiro", "anderson", "both"],
+            "both",
+            2,
+            0
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "alpha",
+            "Alpha",
+            "",
+            2,
+            2
+        )
+
+        self._add_check(
+            box,
+            group,
+            "verbose",
+            "Mostrar resumen en log",
+            True,
+            3,
+            0
+        )
+
         self._run_button(tab, 1, "Ejecutar normalidad", lambda: self.run_analysis("normality"))
+
 
     def _build_kde_tab(self):
         group = "kde"
         tab = self._new_tab("KDE")
         box = self._section(tab, "Parametros", 0)
-        self._add_combo(box, group, "data_df_name", "Dataset OTU", [], "otu_data_converted", 0, 0, dataset_combo=True)
-        self._add_entry(box, group, "grid_size", "Grid size", "1000", 0, 2)
-        self._add_entry(box, group, "cv_subsample", "CV subsample", "1000", 1, 0)
-        self._add_entry(box, group, "cv_folds", "CV folds", "3", 1, 2)
-        self._add_entry(box, group, "cv_bw_grid", "CV BW grid", "8", 2, 0)
-        self._add_entry(box, group, "min_bandwidth", "Min bandwidth", "1.0", 2, 2)
-        self._add_entry(box, group, "cv_max_expansions", "Max expansions", "4", 3, 0)
+        self._add_combo(box, group, "data_df_name", "Dataset OTU", [], dataset_combo=True)
+        self._add_entry(box, group, "grid_size", "Grid size", "", 0, 2)
+        self._add_entry(box, group, "cv_subsample", "CV subsample", "", 1, 0)
+        self._add_entry(box, group, "cv_folds", "CV folds", "", 1, 2)
+        self._add_entry(box, group, "cv_bw_grid", "CV BW grid", "", 2, 0)
+        self._add_entry(box, group, "min_bandwidth", "Min bandwidth", "", 2, 2)
+        self._add_entry(box, group, "cv_max_expansions", "Max expansions", "", 3, 0)
         self._add_entry(box, group, "test_kernel_bandwidths", "BW por kernel", "", 3, 2)
         self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 4, 0)
         self._run_button(tab, 1, "Ejecutar KDE", lambda: self.run_analysis("kde"))
+
 
     def _build_kruskal_tab(self):
         group = "kruskal"
         tab = self._new_tab("Kruskal-Wallis")
         box = self._section(tab, "Parametros", 0)
-        self._add_combo(box, group, "group_df_name", "Dataset grupos", [], "anthro_data", 0, 0, dataset_combo=True)
-        self._add_combo(box, group, "value_df_name", "Dataset valores", [], "anthro_data", 0, 2, dataset_combo=True)
-        self._add_combo(box, group, "group_col", "Columna grupo", [], "bmi_class", 1, 0, column_for=("kruskal", "group_df_name"))
-        self._add_combo(box, group, "id_col_group", "ID grupos", [], "ID", 1, 2, column_for=("kruskal", "group_df_name"))
-        self._add_combo(box, group, "id_col_value", "ID valores", [], "ID", 2, 0, column_for=("kruskal", "value_df_name"))
-        self._add_entry(box, group, "value_cols", "Variables", "glucose, HDL, LDL, waist, body_fat, HOMA_IR", 2, 2)
-        self._add_entry(box, group, "alpha", "Alpha", "0.0003", 3, 0)
-        self._add_entry(box, group, "min_group_size", "Min grupo", "3", 3, 2)
-        self._add_check(box, group, "apply_fdr", "Aplicar FDR", True, 4, 0)
-        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 4, 2)
-        self._run_button(tab, 1, "Ejecutar Kruskal-Wallis", lambda: self.run_analysis("kruskal"))
+
+        self._add_combo(
+            box,
+            group,
+            "group_df_name",
+            "Dataset grupos",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "value_df_name",
+            "Dataset valores",
+            [],
+            "",
+            0,
+            2,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "group_col",
+            "Columna grupo",
+            [],
+            "",
+            1,
+            0,
+            column_for=("kruskal", "group_df_name")
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "id_col_group",
+            "ID grupos",
+            [],
+            "",
+            1,
+            2,
+            column_for=("kruskal", "group_df_name")
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "id_col_value",
+            "ID valores",
+            [],
+            "",
+            2,
+            0,
+            column_for=("kruskal", "value_df_name")
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "value_cols",
+            "Variables",
+            dataset_key="value_df_name",
+            row=2,
+            col=2,
+            width=42
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "alpha",
+            "Alpha",
+            "",
+            3,
+            0
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "min_group_size",
+            "Min grupo",
+            "",
+            3,
+            2
+        )
+
+        self._add_check(
+            box,
+            group,
+            "apply_fdr",
+            "Aplicar FDR",
+            True,
+            4,
+            0
+        )
+
+        self._add_check(
+            box,
+            group,
+            "verbose",
+            "Mostrar resumen en log",
+            True,
+            4,
+            2
+        )
+
+        self._run_button(
+            tab,
+            1,
+            "Ejecutar Kruskal-Wallis",
+            lambda: self.run_analysis("kruskal")
+        )
 
     def _build_mann_whitney_tab(self):
         group = "mann_whitney"
         tab = self._new_tab("Mann-Whitney")
         box = self._section(tab, "Parametros", 0)
-        self._add_combo(box, group, "group_df_name", "Dataset grupos", [], "anthro_data", 0, 0, dataset_combo=True)
-        self._add_combo(box, group, "value_df_name", "Dataset valores", [], "otu_data_converted", 0, 2, dataset_combo=True)
-        self._add_combo(box, group, "group_col", "Columna grupo", [], "sex", 1, 0, column_for=("mann_whitney", "group_df_name"))
-        self._add_entry(box, group, "groups_to_compare", "Grupos", "Male, Female", 1, 2)
-        self._add_combo(box, group, "id_col_group", "ID grupos", [], "ID", 2, 0, column_for=("mann_whitney", "group_df_name"))
-        self._add_combo(box, group, "id_col_value", "ID valores", [], "ID", 2, 2, column_for=("mann_whitney", "value_df_name"))
-        self._add_entry(box, group, "value_cols", "Variables", "", 3, 0)
-        self._add_combo(box, group, "alternative", "Alternativa", ["two-sided", "less", "greater"], "two-sided", 3, 2)
-        self._add_entry(box, group, "alpha", "Alpha", "0.0003", 4, 0)
-        self._add_entry(box, group, "min_group_size", "Min grupo", "3", 4, 2)
-        self._add_check(box, group, "apply_fdr", "Aplicar FDR", True, 5, 0)
-        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 5, 2)
-        self._run_button(tab, 1, "Ejecutar Mann-Whitney", lambda: self.run_analysis("mann_whitney"))
+
+        self._add_combo(
+            box,
+            group,
+            "group_df_name",
+            "Dataset grupos",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "value_df_name",
+            "Dataset valores",
+            [],
+            "",
+            0,
+            2,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "group_col",
+            "Columna grupo",
+            [],
+            "",
+            1,
+            0,
+            column_for=("mann_whitney", "group_df_name")
+        )
+
+        self._add_group_values_dropdown(
+            box,
+            group,
+            "groups_to_compare",
+            "Grupos",
+            dataset_key="group_df_name",
+            column_key="group_col",
+            row=1,
+            col=2,
+            width=42
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "id_col_group",
+            "ID grupos",
+            [],
+            "",
+            2,
+            0,
+            column_for=("mann_whitney", "group_df_name")
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "id_col_value",
+            "ID valores",
+            [],
+            "",
+            2,
+            2,
+            column_for=("mann_whitney", "value_df_name")
+        )
+
+        self._add_numeric_columns_dropdown(
+            box,
+            group,
+            "value_cols",
+            "Variables",
+            dataset_key="value_df_name",
+            row=3,
+            col=0,
+            width=42
+        )
+
+        self._add_combo(
+            box,
+            group,
+            "alternative",
+            "Alternativa",
+            ["two-sided", "less", "greater"],
+            "two-sided",
+            3,
+            2
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "alpha",
+            "Alpha",
+            "",
+            4,
+            0
+        )
+
+        self._add_entry(
+            box,
+            group,
+            "min_group_size",
+            "Min grupo",
+            "",
+            4,
+            2
+        )
+
+        self._add_check(
+            box,
+            group,
+            "apply_fdr",
+            "Aplicar FDR",
+            True,
+            5,
+            0
+        )
+
+        self._add_check(
+            box,
+            group,
+            "verbose",
+            "Mostrar resumen en log",
+            True,
+            5,
+            2
+        )
+
+        self._run_button(
+            tab,
+            1,
+            "Ejecutar Mann-Whitney",
+            lambda: self.run_analysis("mann_whitney")
+        )
+
 
     def _build_dbscan_tab(self):
         group = "dbscan"
         tab = self._new_tab("DBSCAN")
+
         data_box = self._section(tab, "Datos y limpieza", 0)
-        self._add_combo(data_box, group, "data_df_name", "Dataset datos", [], "anthro_data", 0, 0, dataset_combo=True)
-        self._add_combo(data_box, group, "id_col", "ID datos", [], "ID", 0, 2, column_for=("dbscan", "data_df_name"))
-        self._add_entry(data_box, group, "feature_cols", "Features", "waist, age, HDL", 1, 0)
-        self._add_combo(data_box, group, "meta_df_name", "Dataset meta", [], "anthro_data", 1, 2, dataset_combo=True)
-        self._add_combo(data_box, group, "meta_id_col", "ID meta", [], "ID", 2, 0, column_for=("dbscan", "meta_df_name"))
-        self._add_combo(data_box, group, "missing_strategy", "Faltantes", ["fill_zero", "drop_rows", "median"], "fill_zero", 2, 2)
-        self._add_check(data_box, group, "drop_non_numeric", "Quitar no numericas", True, 3, 0)
-        self._add_check(data_box, group, "remove_zero_rows", "Quitar filas suma 0", True, 3, 2)
-        self._add_entry(data_box, group, "min_prevalence", "Min prevalence", "", 4, 0)
-        self._add_entry(data_box, group, "min_total_abundance", "Min abundance", "", 4, 2)
+
+        self._add_combo(
+            data_box,
+            group,
+            "data_df_name",
+            "Dataset datos",
+            [],
+            "",
+            0,
+            0,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            data_box,
+            group,
+            "id_col",
+            "ID datos",
+            [],
+            "",
+            0,
+            2,
+            column_for=("dbscan", "data_df_name")
+        )
+
+        self._add_numeric_columns_dropdown(
+            data_box,
+            group,
+            "feature_cols",
+            "Features numéricos",
+            dataset_key="data_df_name",
+            row=1,
+            col=0,
+            width=42
+        )
+
+        self._add_combo(
+            data_box,
+            group,
+            "meta_df_name",
+            "Dataset meta",
+            [],
+            "",
+            1,
+            2,
+            dataset_combo=True
+        )
+
+        self._add_combo(
+            data_box,
+            group,
+            "meta_id_col",
+            "ID meta",
+            [],
+            "",
+            2,
+            0,
+            column_for=("dbscan", "meta_df_name")
+        )
+
+        self._add_combo(
+            data_box,
+            group,
+            "missing_strategy",
+            "Faltantes",
+            ["fill_zero", "drop_rows", "median"],
+            "fill_zero",
+            2,
+            2
+        )
+
+        self._add_check(
+            data_box,
+            group,
+            "drop_non_numeric",
+            "Quitar no numéricas",
+            True,
+            3,
+            0
+        )
+
+        self._add_check(
+            data_box,
+            group,
+            "remove_zero_rows",
+            "Quitar filas suma 0",
+            True,
+            3,
+            2
+        )
+
+        self._add_entry(
+            data_box,
+            group,
+            "min_prevalence",
+            "Min prevalence",
+            "",
+            4,
+            0
+        )
+
+        self._add_entry(
+            data_box,
+            group,
+            "min_total_abundance",
+            "Min abundance",
+            "",
+            4,
+            2
+        )
 
         model_box = self._section(tab, "Modelo", 1)
-        self._add_entry(model_box, group, "eps", "eps", "1.0", 0, 0)
-        self._add_entry(model_box, group, "min_samples", "Min samples", "3", 0, 2)
-        self._add_combo(model_box, group, "transform_method", "Transformacion", ["none", "log1p", "clr"], "none", 1, 0)
-        self._add_entry(model_box, group, "pseudocount", "Pseudocount", "1.0", 1, 2)
-        self._add_check(model_box, group, "scale", "Escalar variables", True, 2, 0)
-        self._add_combo(model_box, group, "embedding_method", "Embedding", ["none", "pca", "kpca", "isomap", "mds", "tsne", "umap"], "pca", 2, 2)
-        self._add_entry(model_box, group, "n_components", "Componentes", "3", 3, 0)
-        self._add_entry(model_box, group, "random_state", "Random state", "42", 3, 2)
-        self._add_entry(model_box, group, "embedding_kwargs", "Embedding JSON", "", 4, 0)
+
+        self._add_entry(
+            model_box,
+            group,
+            "eps",
+            "eps",
+            "",
+            0,
+            0
+        )
+
+        self._add_entry(
+            model_box,
+            group,
+            "min_samples",
+            "Min samples",
+            "",
+            0,
+            2
+        )
+
+        self._add_combo(
+            model_box,
+            group,
+            "transform_method",
+            "Transformación",
+            ["none", "log1p", "clr"],
+            "none",
+            1,
+            0
+        )
+
+        self._add_entry(
+            model_box,
+            group,
+            "pseudocount",
+            "Pseudocount",
+            "",
+            1,
+            2
+        )
+
+        self._add_check(
+            model_box,
+            group,
+            "scale",
+            "Escalar variables",
+            True,
+            2,
+            0
+        )
+
+        self._add_combo(
+            model_box,
+            group,
+            "embedding_method",
+            "Embedding",
+            ["none", "pca", "kpca", "isomap", "mds", "tsne", "umap"],
+            "none",
+            2,
+            2
+        )
+
+        self._add_entry(
+            model_box,
+            group,
+            "n_components",
+            "Componentes",
+            "",
+            3,
+            0
+        )
+
+        self._add_entry(
+            model_box,
+            group,
+            "random_state",
+            "Random state",
+            "42",
+            3,
+            2
+        )
+
+        self._add_entry(
+            model_box,
+            group,
+            "embedding_kwargs",
+            "Embedding JSON",
+            "",
+            4,
+            0
+        )
 
         out_box = self._section(tab, "Figuras y resumen", 2)
-        self._add_check(out_box, group, "calculate_k_distance", "Calcular k-distance", True, 0, 0)
-        self._add_entry(out_box, group, "k_distance_min_samples", "K-distance k", "8", 0, 2)
-        self._add_check(out_box, group, "plot_k_distance_graph", "Guardar figura k-distance", True, 1, 0)
-        self._add_check(out_box, group, "plot_embedding_graph", "Guardar figura embedding", True, 1, 2)
-        self._add_entry(out_box, group, "summary_numeric_cols", "Resumen numerico", "glucose, waist", 2, 0)
-        self._add_entry(out_box, group, "summary_categorical_cols", "Resumen categorico", "bmi_class", 2, 2)
-        self._add_entry(out_box, group, "summary_numeric_aggs", "Agregaciones", "median", 3, 0)
-        self._add_check(out_box, group, "verbose", "Mostrar resumen en log", True, 3, 2)
-        self._run_button(tab, 3, "Ejecutar DBSCAN", lambda: self.run_analysis("dbscan"))
+
+        self._add_check(
+            out_box,
+            group,
+            "calculate_k_distance",
+            "Calcular k-distance",
+            True,
+            0,
+            0
+        )
+
+        self._add_entry(
+            out_box,
+            group,
+            "k_distance_min_samples",
+            "K-distance min_samples",
+            "",
+            0,
+            2
+        )
+
+        self._add_check(
+            out_box,
+            group,
+            "plot_k_distance_graph",
+            "Guardar figura k-distance",
+            True,
+            1,
+            0
+        )
+
+        self._add_check(
+            out_box,
+            group,
+            "plot_embedding_graph",
+            "Guardar figura embedding",
+            True,
+            1,
+            2
+        )
+
+        self._add_numeric_columns_dropdown(
+            out_box,
+            group,
+            "summary_numeric_cols",
+            "Resumen numérico",
+            dataset_key="meta_df_name",
+            row=2,
+            col=0,
+            width=42
+        )
+
+        self._add_categorical_columns_dropdown(
+            out_box,
+            group,
+            "summary_categorical_cols",
+            "Resumen categórico",
+            dataset_key="meta_df_name",
+            row=2,
+            col=2,
+            width=42
+        )
+
+        self._add_entry(
+            out_box,
+            group,
+            "summary_numeric_aggs",
+            "Agregaciones",
+            "median",
+            3,
+            0
+        )
+
+        self._add_check(
+            out_box,
+            group,
+            "verbose",
+            "Mostrar resumen en log",
+            True,
+            3,
+            2
+        )
+
+        self._run_button(
+            tab,
+            3,
+            "Ejecutar DBSCAN",
+            lambda: self.run_analysis("dbscan")
+        )
+
+
 
     def load_files(self):
         paths = filedialog.askopenfilenames(
@@ -710,6 +1806,7 @@ class MicrobiotaGUI(tk.Tk):
                 self._log(f"Error cargando {path.name}: {exc}")
         self.refresh_datasets()
 
+
     def remove_selected_dataset(self):
         selected = self.dataset_tree.selection()
         if not selected:
@@ -720,54 +1817,159 @@ class MicrobiotaGUI(tk.Tk):
             self._log(f"Dataset quitado de memoria: {name}")
         self.refresh_datasets()
 
+
     def preview_selected_dataset(self):
         selected = self.dataset_tree.selection()
         if not selected:
             messagebox.showinfo(APP_TITLE, "Selecciona un dataset para previsualizar.")
             return
+
         name = self.dataset_tree.item(selected[0], "text")
         df = self.dfs.get(name)
         if df is None:
             return
+
         top = tk.Toplevel(self)
         top.title(f"Vista previa - {name}")
-        top.geometry("980x520")
+        top.geometry("1100x580")
+        top.minsize(850, 420)
+
         frame = ttk.Frame(top, padding=10)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text=f"{name} | shape {df.shape}", font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 8))
-        tree = ttk.Treeview(frame, show="headings")
-        tree.pack(side="left", fill="both", expand=True)
-        yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-        xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        yscroll.pack(side="right", fill="y")
-        xscroll.pack(side="bottom", fill="x")
+
+        frame.grid_rowconfigure(1, weight=1)
+        frame.grid_columnconfigure(0, weight=1)
+
+        ttk.Label(
+            frame,
+            text=f"{name} | shape {df.shape}",
+            font=("Segoe UI", 11, "bold")
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        table_frame = ttk.Frame(frame)
+        table_frame.grid(row=1, column=0, sticky="nsew")
+        
+        table_frame.grid_rowconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
+        
+        tree = ttk.Treeview(table_frame, show="headings")
+
+        yscroll = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=tree.yview
+        )
+
+        xscroll = ttk.Scrollbar(
+            table_frame,
+            orient="horizontal",
+            command=tree.xview
+        )
+
+        tree.configure(
+            yscrollcommand=yscroll.set,
+            xscrollcommand=xscroll.set
+        )
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+
         preview = df.head(100).copy()
-        columns = [str(c) for c in preview.columns[:60]]
+
+        max_cols = min(len(preview.columns), 80)
+
+        columns = [str(c) for c in preview.columns[:max_cols]]
         tree["columns"] = columns
+
         for col in columns:
             tree.heading(col, text=col)
-            tree.column(col, width=130, stretch=False)
-        for _, row in preview.iloc[:, :60].iterrows():
-            values = ["" if pd.isna(v) else str(v) for v in row.tolist()]
+            tree.column(
+                col,
+                width=140,
+                minwidth=90,
+                stretch=False,
+                anchor="w"
+            )
+
+        for _, row in preview.iloc[:, :max_cols].iterrows():
+            values = []
+                
+            for v in row.tolist():
+                if pd.isna(v):
+                    values.append("")
+                else:
+                    values.append(str(v)[:160])
+
             tree.insert("", "end", values=values)
+
+        tree.bind("<MouseWheel>", self._on_preview_dataset_mousewheel)
+        tree.bind("<Shift-MouseWheel>", self._on_preview_dataset_shift_mousewheel)
+
+        info_var = tk.StringVar(
+            value=(
+                f"Mostrando primeras {len(preview)} filas y primeras {max_cols} columnas. "
+                "Usa la barra inferior o Shift + rueda para moverte lateralmente."
+            )
+        )
+
+        ttk.Label(
+            frame,
+            textvariable=info_var,
+            style="Subtle.TLabel"
+        ).grid(row=2, column=0, sticky="ew", pady=(8, 0))
+
+        
+    def _on_preview_dataset_mousewheel(self, event):
+        tree = event.widget
+
+        if event.delta:
+            tree.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        return "break"
+
+
+    def _on_preview_dataset_shift_mousewheel(self, event):
+        tree = event.widget
+        
+        if event.delta:
+            tree.xview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        return "break"
+
 
     def refresh_datasets(self):
         for item in self.dataset_tree.get_children():
             self.dataset_tree.delete(item)
+
         for name, df in sorted(self.dfs.items()):
             self.dataset_tree.insert("", "end", text=name, values=(f"{df.shape[0]} x {df.shape[1]}",))
 
         names = sorted(self.dfs.keys())
+
         for combo in self.df_combos:
+            current = combo.get()
             combo.configure(values=names)
+
+            if names:
+                if current not in names:
+                    combo.set(names[0])
+            else:
+                combo.set("")
+
         self.refresh_columns()
+
 
     def refresh_columns(self):
         for combo, (group, dataset_key) in self.column_combos:
             dataset_name = self.inputs.get(group, {}).get(dataset_key, tk.StringVar()).get()
             df = self.dfs.get(dataset_name)
             combo.configure(values=[] if df is None else list(map(str, df.columns)))
+
+        self.refresh_numeric_column_dropdowns()
+        self.refresh_categorical_column_dropdowns()
+        self.refresh_group_value_dropdowns()
+
 
     def load_manifest_file(self):
         path = filedialog.askopenfilename(
@@ -795,81 +1997,196 @@ class MicrobiotaGUI(tk.Tk):
         self.show_result_key(key)
         self._log(f"Manifest cargado: {manifest_path}")
 
+
     def on_result_selected(self, _event=None):
         selected = self.result_tree.selection()
         if not selected:
             return
         self.show_result_key(selected[0])
 
+
     def show_result_key(self, key):
         manifest = self.result_manifests.get(key)
         if not manifest:
             return
 
-        self.active_result_key = key
-        self.visible_tables = {}
-        self.visible_figures = {}
-        for item in self.table_list.get_children():
-            self.table_list.delete(item)
-        for item in self.figure_list.get_children():
-            self.figure_list.delete(item)
+        self.loading_result_view = True
 
-        run_dir = self.result_run_dirs.get(key)
-        analysis = manifest.get("analysis", key)
-        created = manifest.get("created_at", "")
-        self.results_title_var.set(f"{analysis} | {created} | {run_dir}")
+        try:
+            self.active_result_key = key
+            self.visible_tables = {}
+            self.visible_figures = {}
+            self.current_table_path = None
+            self.current_figure_path = None
 
-        for i, table in enumerate(manifest.get("tables", []), start=1):
-            iid = f"table_{i}"
-            self.visible_tables[iid] = table
-            name = table.get("name") or Path(table.get("path", "")).name
-            rows = table.get("rows", "")
-            cols = table.get("columns", "")
-            self.table_list.insert("", "end", iid=iid, text=name, values=(rows, cols))
+            for item in self.table_list.get_children():
+                self.table_list.delete(item)
 
-        for i, figure_path in enumerate(manifest.get("figures", []), start=1):
-            iid = f"figure_{i}"
-            path = self._artifact_path(figure_path)
-            self.visible_figures[iid] = path
-            self.figure_list.insert("", "end", iid=iid, text=path.name)
+            for item in self.figure_list.get_children():
+                self.figure_list.delete(item)
 
-        table_items = self.table_list.get_children()
-        figure_items = self.figure_list.get_children()
-        if table_items:
-            self.table_list.selection_set(table_items[0])
-            self.table_list.focus(table_items[0])
-            self.show_table_preview(self.visible_tables[table_items[0]])
-        else:
-            self.clear_table_preview("Esta corrida no tiene tablas exportadas.")
+            run_dir = self.result_run_dirs.get(key)
+            analysis = manifest.get("analysis", key)
+            created = manifest.get("created_at", "")
+            self.results_title_var.set(f"{analysis} | {created} | {run_dir}")
 
-        if figure_items:
-            self.figure_list.selection_set(figure_items[0])
-            self.figure_list.focus(figure_items[0])
-            self.show_figure_preview(self.visible_figures[figure_items[0]])
-        else:
-            self.clear_figure_preview("Esta corrida no tiene figuras exportadas.")
+            for i, table in enumerate(manifest.get("tables", []), start=1):
+                iid = f"{key}_table_{i}"
+                self.visible_tables[iid] = table
+                name = table.get("name") or Path(table.get("path", "")).name
+                rows = table.get("rows", "")
+                cols = table.get("columns", "")
 
-        self.notebook.select(self.results_tab)
+                self.table_list.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    text=name,
+                    values=(rows, cols)
+                )
+
+            for i, figure_path in enumerate(manifest.get("figures", []), start=1):
+                iid = f"{key}_figure_{i}"
+                path = self._artifact_path(figure_path)
+                self.visible_figures[iid] = path
+
+                self.figure_list.insert(
+                    "",
+                    "end",
+                    iid=iid,
+                    text=path.name
+                )
+
+            table_items = self.table_list.get_children()
+            figure_items = self.figure_list.get_children()
+
+            if table_items:
+                first_table = table_items[0]
+                self.table_list.selection_set(first_table)
+                self.table_list.focus(first_table)
+                self.table_list.see(first_table)
+            else:
+                self.clear_table_preview("Esta corrida no tiene tablas exportadas.")
+
+            if figure_items:
+                first_figure = figure_items[0]
+                self.figure_list.selection_set(first_figure)
+                self.figure_list.focus(first_figure)
+                self.figure_list.see(first_figure)
+            else:
+                self.clear_figure_preview("Esta corrida no tiene figuras exportadas.")
+
+            self.notebook.select(self.results_tab)
+
+            if self.results_lists_notebook is not None:
+                current_left_tab = self.results_lists_notebook.index("current")
+
+                if current_left_tab == 0 and table_items:
+                    self.show_current_table_selection()
+                elif current_left_tab == 1 and figure_items:
+                    self.show_current_figure_selection()
+                elif table_items:
+                    self.results_lists_notebook.select(0)
+                    self.show_current_table_selection()
+                elif figure_items:
+                    self.results_lists_notebook.select(1)
+                    self.show_current_figure_selection()
+
+        finally:
+            self.loading_result_view = False
+
 
     def refresh_active_result_view(self):
         if self.active_result_key:
             self.show_result_key(self.active_result_key)
 
+
     def on_table_selected(self, _event=None):
-        selected = self.table_list.selection()
-        if not selected:
+        if self.loading_result_view:
             return
-        table = self.visible_tables.get(selected[0])
-        if table:
-            self.show_table_preview(table)
+
+        self.show_current_table_selection()
+
 
     def on_figure_selected(self, _event=None):
-        selected = self.figure_list.selection()
-        if not selected:
+        if self.loading_result_view:
             return
-        path = self.visible_figures.get(selected[0])
-        if path:
-            self.show_figure_preview(path)
+
+        self.show_current_figure_selection()
+
+
+    def on_result_list_tab_changed(self, _event=None):
+        if self.loading_result_view:
+            return
+
+        if self.results_lists_notebook is None:
+            return
+
+        current_tab = self.results_lists_notebook.index("current")
+
+        if current_tab == 0:
+            self.show_current_table_selection()
+        elif current_tab == 1:
+            self.show_current_figure_selection()
+
+
+    def show_current_table_selection(self):
+        selected = self.table_list.selection()
+
+        if selected:
+            iid = selected[0]
+        else:
+            iid = self.table_list.focus()
+
+        if not iid:
+            table_items = self.table_list.get_children()
+
+            if not table_items:
+                self.clear_table_preview("No hay tablas disponibles.")
+                return
+
+            iid = table_items[0]
+            self.table_list.selection_set(iid)
+            self.table_list.focus(iid)
+            self.table_list.see(iid)
+
+        table = self.visible_tables.get(iid)
+
+        if table is None:
+            return
+
+        self.show_table_preview(table)
+        self.preview_notebook.select(0)
+
+
+    def show_current_figure_selection(self):
+        selected = self.figure_list.selection()
+
+        if selected:
+            iid = selected[0]
+        else:
+            iid = self.figure_list.focus()
+
+        if not iid:
+            figure_items = self.figure_list.get_children()
+
+            if not figure_items:
+                self.clear_figure_preview("No hay figuras disponibles.")
+                return
+
+            iid = figure_items[0]
+            self.figure_list.selection_set(iid)
+            self.figure_list.focus(iid)
+            self.figure_list.see(iid)
+
+        path = self.visible_figures.get(iid)
+
+        if path is None:
+            return
+
+        self.show_figure_preview(path)
+        self.preview_notebook.select(1)
+
 
     def _artifact_path(self, path_text):
         path = Path(path_text)
@@ -882,12 +2199,14 @@ class MicrobiotaGUI(tk.Tk):
             return run_dir / path
         return path
 
+
     def clear_table_preview(self, message):
         for item in self.table_preview.get_children():
             self.table_preview.delete(item)
         self.table_preview["columns"] = []
         self.table_info_var.set(message)
         self.current_table_path = None
+
 
     def show_table_preview(self, table):
         path = self._artifact_path(table.get("path", ""))
@@ -935,12 +2254,14 @@ class MicrobiotaGUI(tk.Tk):
         self.table_info_var.set(f"{table.get('name', path.name)} | {rows} x {cols} | {path}{suffix}")
         self.preview_notebook.select(0)
 
+
     def clear_figure_preview(self, message):
         self.figure_canvas.delete("all")
         self.figure_canvas.configure(scrollregion=(0, 0, 0, 0))
         self.figure_info_var.set(message)
         self.current_figure_path = None
         self.figure_image_ref = None
+
 
     def show_figure_preview(self, path):
         path = Path(path)
@@ -973,6 +2294,7 @@ class MicrobiotaGUI(tk.Tk):
         self.figure_info_var.set(f"{path.name} | {path}")
         self.preview_notebook.select(1)
 
+
     def open_selected_result_file(self):
         current_preview = self.preview_notebook.index("current")
         path = self.current_figure_path if current_preview == 1 else self.current_table_path
@@ -992,6 +2314,7 @@ class MicrobiotaGUI(tk.Tk):
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"No se pudo abrir el archivo:\n{exc}")
 
+
     def open_active_run_dir(self):
         path = None
         if self.active_result_key:
@@ -1006,10 +2329,12 @@ class MicrobiotaGUI(tk.Tk):
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"No se pudo abrir la carpeta:\n{exc}")
 
+
     def choose_output_dir(self):
         path = filedialog.askdirectory(title="Carpeta de salida", initialdir=self.output_dir_var.get() or str(DEFAULT_OUTPUT_DIR))
         if path:
             self.output_dir_var.set(path)
+
 
     def open_output_dir(self):
         path = Path(self.output_dir_var.get()).expanduser()
@@ -1018,6 +2343,7 @@ class MicrobiotaGUI(tk.Tk):
             os.startfile(path)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"No se pudo abrir la carpeta:\n{exc}")
+
 
     def run_analysis(self, analysis):
         if self.worker and self.worker.is_alive():
@@ -1037,6 +2363,7 @@ class MicrobiotaGUI(tk.Tk):
         self._log(f"\n=== Ejecutando {analysis} ===")
         self.worker = threading.Thread(target=self._worker_run, args=(analysis, params, output_root), daemon=True)
         self.worker.start()
+
 
     def _worker_run(self, analysis, params, output_root):
         try:
@@ -1070,6 +2397,7 @@ class MicrobiotaGUI(tk.Tk):
             self.msg_queue.put(("done", analysis, result, run_dir, manifest, log_text))
         except Exception:
             self.msg_queue.put(("error", analysis, traceback.format_exc()))
+
 
     def _collect_params(self, analysis):
         values = {key: var.get() for key, var in self.inputs[analysis].items()}
@@ -1173,6 +2501,7 @@ class MicrobiotaGUI(tk.Tk):
 
         raise ValueError(f"Analisis desconocido: {analysis}")
 
+
     def _execute(self, analysis, params):
         if analysis == "characterization":
             return distribution_plots_from_loaded(dfs=self.dfs, **params)
@@ -1187,6 +2516,7 @@ class MicrobiotaGUI(tk.Tk):
         if analysis == "dbscan":
             return dbscan_from_loaded(dfs=self.dfs, **params)
         raise ValueError(f"Analisis desconocido: {analysis}")
+
 
     def _poll_queue(self):
         try:
@@ -1222,6 +2552,7 @@ class MicrobiotaGUI(tk.Tk):
     def _log(self, text):
         self.log_text.insert("end", str(text) + "\n")
         self.log_text.see("end")
+
 
 
 def main():

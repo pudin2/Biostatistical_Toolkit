@@ -1,0 +1,10 @@
+{
+  "df_name": "anthro_data",
+  "numeric_cols": [
+    "socioeconomic"
+  ],
+  "analysis_mode": "both",
+  "bins": 80,
+  "plot_positive_hist": false,
+  "verbose": true
+}
