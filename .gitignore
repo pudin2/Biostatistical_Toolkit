@@ -62,3 +62,6 @@ Thumbs.db
 # IDEs
 .vscode/
 .idea/
+
+.ipynb_checkpoints
+Datos/.ipynb_checkpoints
