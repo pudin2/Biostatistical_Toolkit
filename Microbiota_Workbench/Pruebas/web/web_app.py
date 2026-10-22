@@ -1,3 +1,7 @@
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # carpeta Pruebas
+import _bootstrap  # noqa: E402,F401  (agrega Libreria_Python al sys.path)
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -7,7 +11,7 @@ from modules.load import load_dataframe_from_path
 from modules.smart_assistant import OpenAssistantEngine
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "Datos"
 SUPPORTED_EXTS = {".csv", ".otus", ".txt", ".meta", ".taxonomy"}
 DEFAULT_HOST = "127.0.0.1"

@@ -7,7 +7,7 @@ import requests
 
 
 def load_env():
-    for path in [Path.cwd() / ".env", Path(__file__).resolve().parent / ".env"]:
+    for path in [Path.cwd() / ".env", Path(__file__).resolve().parents[2] / "Libreria_Python" / ".env"]:
         if not path.exists():
             continue
         for raw in path.read_text(encoding="utf-8").splitlines():

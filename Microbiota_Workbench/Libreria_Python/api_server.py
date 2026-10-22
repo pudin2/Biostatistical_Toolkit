@@ -21,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from modules.load import load_dataframe_from_path
+from modules.load import load_dataframe_from_path, supported_extensions
 from modules.characterization import distribution_plots_from_loaded, normality_tests_from_loaded
 from modules.kde import kde_from_loaded
 from modules.kruskal_wallis import kruskal_wallis_from_loaded
@@ -42,7 +42,7 @@ RUNS_DIR = Path(os.getenv('MICROBIOTA_RUNS_DIR', APP_ROOT / 'outputs' / 'web_run
 ANGULAR_DIST = Path(os.getenv('MICROBIOTA_ANGULAR_DIST', APP_ROOT.parent / 'microbiota-health-angular' / 'dist' / 'microbiota-health-workbench' / 'browser'))
 DEFAULT_HOST = os.getenv('MICROBIOTA_HOST', '127.0.0.1')
 DEFAULT_PORT = int(os.getenv('MICROBIOTA_PORT', '8765'))
-SUPPORTED_EXTS = {'.csv', '.otus', '.txt', '.meta', '.taxonomy', '.tsv'}
+SUPPORTED_EXTS = set(supported_extensions())
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -296,7 +296,7 @@ class WorkbenchState:
         safe_name = Path(filename).name
         suffix = Path(safe_name).suffix.lower()
         if suffix not in SUPPORTED_EXTS:
-            raise ValueError(f'Formato no soportado: {suffix}. Usa CSV, TSV, TXT, OTUS, META o TAXONOMY.')
+            raise ValueError(f'Formato no soportado: {suffix}. Formatos disponibles: ' + ', '.join(sorted(SUPPORTED_EXTS)))
         target = DATA_DIR / safe_name
         target.write_bytes(content)
         self.reload_datasets()
