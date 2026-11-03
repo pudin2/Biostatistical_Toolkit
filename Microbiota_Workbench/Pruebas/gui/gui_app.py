@@ -51,12 +51,15 @@ from modules.exploration import (
 from modules.visualizations import (
     Debouncer,
     InteractiveController,
+    LinkedDistributionView,
     PresetStore,
     ViewHistory,
     VisualizationConfig,
     build_visualization,
+    compare_selection,
     dataset_from_selection,
     export_plot_result,
+    format_selection_comparison,
     infer_filter_specs,
     recommend_visualizations,
     suggest_analysis_routes,
@@ -195,7 +198,7 @@ HELP_TEXTS = {
     "rank_search": "Filtra rank-abundancia por texto contenido en el nombre de la feature.",
     "hover_enabled": "Activa tooltips al mover el mouse sobre puntos del gráfico.",
     "inspector_enabled": "Al hacer clic sobre un punto muestra el registro completo en el inspector.",
-    "selection_mode": "Permite seleccionar observaciones con lazo o rectángulo para crear subconjuntos.",
+    "selection_mode": "Herramienta de selección activa (se cambia sin redibujar). Shift suma, Ctrl resta, Esc limpia. También puedes hacer clic sobre una categoría o una barra de histograma para seleccionar sus registros.",
     "legend_toggle": "Permite hacer clic en la leyenda para ocultar o volver a mostrar series.",
     "__button__.Recomendar vistas": "Analiza el dataset y propone gráficos útiles que puedes aplicar con un clic.",
     "__button__.Guardar preset": "Guarda la configuración actual del constructor para reutilizarla después.",
@@ -204,6 +207,7 @@ HELP_TEXTS = {
     "__button__.Rehacer": "Restaura una configuración que acabas de deshacer.",
     "__button__.Reset vista": "Restaura los límites originales de zoom y desplazamiento del gráfico.",
     "__button__.Abrir HTML": "Abre la versión Plotly interactiva en el navegador cuando está disponible.",
+    "__button__.Invertir selección": "Selecciona todos los registros visibles que no estaban seleccionados.",
     "__button__.Crear dataset selección": "Crea un nuevo dataset en memoria con las observaciones seleccionadas en el gráfico.",
     "__button__.Exportar todo": "Exporta PNG, SVG, PDF, CSV, XLSX y HTML interactivo de la vista actual.",
 }
@@ -214,6 +218,35 @@ def sanitize_name(value, fallback="artifact"):
     text = re.sub(r"[^\w.\-]+", "_", text, flags=re.ASCII)
     text = text.strip("._")
     return text[:120] or fallback
+
+
+def relocate_artifact_path(path_text, run_dir=None):
+    """Ubica un archivo listado en un manifest aunque la carpeta de corridas se haya movido.
+
+    Los manifests guardan rutas absolutas; si ya no existen, se buscan dentro de `run_dir`
+    (misma ruta desde el nombre de la carpeta de la corrida, o por nombre en sus subcarpetas).
+    """
+    path = Path(path_text)
+    if path.exists() or run_dir is None:
+        return path
+
+    run_dir = Path(run_dir)
+    if not path.is_absolute():
+        return run_dir / path
+
+    parts = path.parts
+    if run_dir.name in parts:
+        idx = len(parts) - 1 - parts[::-1].index(run_dir.name)
+        candidate = run_dir.joinpath(*parts[idx + 1:])
+        if candidate.exists():
+            return candidate
+
+    for sub in ("", "tables", "figures", "arrays", "objects", "html"):
+        candidate = run_dir / sub / path.name
+        if candidate.exists():
+            return candidate
+
+    return path
 
 
 def unique_name(name, existing):
@@ -1990,6 +2023,14 @@ class MicrobiotaGUI(tk.Tk):
         create_sel_btn = ttk.Button(interaction_box, text="Crear dataset selección", command=self.create_dataset_from_visual_selection)
         create_sel_btn.grid(row=2, column=3, sticky="ew", pady=(6, 0))
         HelpTooltip(create_sel_btn, HELP_TEXTS["__button__.Crear dataset selección"])
+        invert_btn = ttk.Button(interaction_box, text="Invertir selección", command=self.invert_visual_selection)
+        invert_btn.grid(row=3, column=2, sticky="ew", padx=(0, 16), pady=(6, 0))
+        HelpTooltip(invert_btn, HELP_TEXTS["__button__.Invertir selección"])
+        ttk.Label(
+            interaction_box,
+            text="Shift suma · Ctrl resta · Esc limpia · clic en categoría o barra selecciona sus registros",
+            style="Subtle.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         # ------------------------------------------------------------------
         # 6) Acciones de navegación/configuración
@@ -2080,8 +2121,23 @@ class MicrobiotaGUI(tk.Tk):
 
         self.visual_builder_stats_text = tk.Text(stats_frame, height=9, wrap="word", relief="flat", bg="#ffffff")
         self.visual_builder_stats_text.grid(row=0, column=0, sticky="ew")
-        self.visual_builder_selection_text = tk.Text(selection_frame, height=9, wrap="none", relief="flat", bg="#ffffff")
-        self.visual_builder_selection_text.grid(row=0, column=0, sticky="ew")
+        self.visual_builder_selection_text = tk.Text(selection_frame, height=14, wrap="none", relief="flat", bg="#ffffff")
+        self.visual_builder_selection_text.grid(row=0, column=0, sticky="nsew")
+        selection_scroll = ttk.Scrollbar(selection_frame, orient="vertical", command=self.visual_builder_selection_text.yview)
+        selection_scroll.grid(row=0, column=1, sticky="ns")
+        self.visual_builder_selection_text.configure(yscrollcommand=selection_scroll.set)
+
+        linked_frame = ttk.Frame(selection_frame)
+        linked_frame.grid(row=0, column=2, sticky="ns", padx=(10, 0))
+        ttk.Label(linked_frame, text="Vista enlazada", style="Subtle.TLabel").grid(row=0, column=0, sticky="w")
+        self.visual_linked_var = tk.StringVar(value="")
+        self.visual_linked_combo = ttk.Combobox(linked_frame, textvariable=self.visual_linked_var, state="readonly", width=28)
+        self.visual_linked_combo.grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        self.visual_linked_combo.bind("<<ComboboxSelected>>", self._on_visual_linked_column)
+        linked_figure = Figure(figsize=(4.2, 2.6), dpi=100)
+        linked_canvas = FigureCanvasTkAgg(linked_figure, master=linked_frame)
+        linked_canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew")
+        self.visual_linked = LinkedDistributionView(linked_figure, linked_canvas, pd.DataFrame())
         self.visual_builder_record_text = tk.Text(record_frame, height=9, wrap="word", relief="flat", bg="#ffffff")
         self.visual_builder_record_text.grid(row=0, column=0, sticky="ew")
         self._set_visual_text(self.visual_builder_stats_text, "Actualiza una visualización para ver estadísticas.")
@@ -2922,6 +2978,15 @@ class MicrobiotaGUI(tk.Tk):
         if key == "df_name":
             self.after_idle(self.refresh_visual_filter_candidates)
 
+        if key == "selection_mode":
+            controller = getattr(self, "visual_builder_interaction", None)
+            if controller is not None:
+                try:
+                    controller.set_tool(self.inputs[group]["selection_mode"].get())
+                except Exception:
+                    pass
+            return
+
         if key == "rank_abundance":
             try:
                 if parse_bool(self.inputs[group]["rank_abundance"].get()):
@@ -3290,16 +3355,11 @@ class MicrobiotaGUI(tk.Tk):
         if parse_bool(self.inputs["visualization"]["inspector_enabled"].get()):
             controller.attach_point_inspector()
 
-        selection_mode = self._input_value("visualization", "selection_mode", "Ninguna")
-        if selection_mode == "Lazo":
-            for ax in result.axes:
-                controller.attach_lasso(ax)
-        elif selection_mode == "Rectángulo":
-            for ax in result.axes:
-                controller.attach_rectangle(ax)
+        controller.attach_selection(self._input_value("visualization", "selection_mode", "Ninguna"))
         if parse_bool(self.inputs["visualization"]["legend_toggle"].get()):
             controller.attach_legend_toggle()
         self.visual_builder_interaction = controller
+        self._refresh_visual_linked_view(result, state)
 
         plot_type = result.metadata.get("plot_type", state.get("plot_type", ""))
         rows = len(result.data) if isinstance(result.data, pd.DataFrame) else 0
@@ -3348,6 +3408,7 @@ class MicrobiotaGUI(tk.Tk):
         self.visual_builder_selected_indices = list(indices)
         self.visual_builder_selected_df = selected_df.copy()
         self.visual_selection_status_var.set(f"{len(indices)} registros seleccionados")
+        self.visual_linked.update(indices)
 
         if selected_df.empty:
             self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
@@ -3370,6 +3431,14 @@ class MicrobiotaGUI(tk.Tk):
         if routes:
             lines.extend(["", "Rutas sugeridas:"])
             lines.extend(f"- {route.get('label', route.get('module'))}" for route in routes)
+
+        data = self.visual_builder_result.data if self.visual_builder_result is not None else None
+        if isinstance(data, pd.DataFrame):
+            try:
+                comparison = compare_selection(data, indices)
+                lines.extend(["", "Seleccionado vs resto", format_selection_comparison(comparison)])
+            except Exception as exc:
+                lines.extend(["", f"No se pudo comparar con el resto: {exc}"])
         self._set_visual_text(self.visual_builder_selection_text, "\n".join(lines))
 
 
@@ -3381,7 +3450,30 @@ class MicrobiotaGUI(tk.Tk):
         if update_text and hasattr(self, "visual_builder_selection_text"):
             self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
         if self.visual_builder_interaction is not None:
-            self.visual_builder_interaction.selected_indices = []
+            self.visual_builder_interaction.clear_selection(emit=False)
+        if getattr(self, "visual_linked", None) is not None:
+            self.visual_linked.update([])
+
+
+    def invert_visual_selection(self):
+        controller = self.visual_builder_interaction
+        if controller is None:
+            messagebox.showinfo(APP_TITLE, "Genera primero una gráfica para poder seleccionar.")
+            return
+        controller.invert_selection()
+
+
+    def _refresh_visual_linked_view(self, result, state):
+        data = result.data if isinstance(result.data, pd.DataFrame) else pd.DataFrame()
+        preferred = state.get("y") or state.get("x")
+        self.visual_linked.set_data(data, preferred)
+        options = self.visual_linked.candidates()
+        self.visual_linked_combo.configure(values=options)
+        self.visual_linked_var.set(self.visual_linked.column or "")
+
+
+    def _on_visual_linked_column(self, _event=None):
+        self.visual_linked.set_column(self.visual_linked_var.get())
 
 
     def create_dataset_from_visual_selection(self):
@@ -3885,12 +3977,7 @@ class MicrobiotaGUI(tk.Tk):
         notes = []
 
         def resolve(path_text):
-            path = Path(path_text)
-            if path.is_absolute() or path.exists():
-                return path
-            if run_dir:
-                return Path(run_dir) / path
-            return path
+            return relocate_artifact_path(path_text, run_dir)
 
         for table in tables[:8]:
             path = resolve(table.get("path", ""))
@@ -4649,15 +4736,7 @@ class MicrobiotaGUI(tk.Tk):
 
 
     def _artifact_path(self, path_text):
-        path = Path(path_text)
-        if path.is_absolute():
-            return path
-        if path.exists():
-            return path
-        run_dir = self.result_run_dirs.get(self.active_result_key)
-        if run_dir:
-            return run_dir / path
-        return path
+        return relocate_artifact_path(path_text, self.result_run_dirs.get(self.active_result_key))
 
 
     def clear_table_preview(self, message):
