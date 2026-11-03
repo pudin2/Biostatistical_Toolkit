@@ -39,6 +39,8 @@ from modules.characterization import distribution_plots_from_loaded, normality_t
 from modules.kde import kde_from_loaded
 from modules.kruskal_wallis import kruskal_wallis_from_loaded
 from modules.mann_whitney import mann_whitney_from_loaded
+from modules.odds_ratio import odds_ratio_from_loaded
+from modules.topology import persistent_homology_from_loaded
 from modules.dbscan import dbscan_from_loaded
 from modules.exploration import (
     cluster_review_from_loaded,
@@ -88,6 +90,17 @@ HELP_TEXTS = {
     "__button__.Ejecutar KDE": "Estima densidades KDE para abundancias positivas y compara kernels.",
     "__button__.Ejecutar Kruskal-Wallis": "Compara tres o mas grupos para cada variable numerica seleccionada.",
     "__button__.Ejecutar Mann-Whitney": "Compara dos grupos para cada variable numerica seleccionada.",
+    "__button__.Ejecutar Odds Ratio": "Calcula OR con IC y prueba exacta de Fisher (presencia y valor alto) de cada variable contra dos grupos.",
+    "positive_label": "Grupo de referencia del OR (el que se compara). Si queda vacio se deduce cuando la columna tiene dos valores.",
+    "negative_label": "Grupo contra el que se compara. Si queda vacio se deduce cuando la columna tiene dos valores.",
+    "presence_threshold": "Umbral de presencia. Vacio = presente si el valor es mayor que 0; con numero, presente si valor >= umbral.",
+    "high_quantile": "Percentil (0-1) de los valores positivos que define 'valor alto'. 0.75 = cuartil superior.",
+    "__button__.Ejecutar homologia persistente": "Calcula diagramas de persistencia (H0, H1, H2) con Vietoris-Rips y, opcionalmente, un p-valor contra un nulo por barajado.",
+    "maxdim": "Dimension homologica maxima: 0 componentes, 1 ciclos, 2 cavidades. 2 es mucho mas lento.",
+    "metric": "Distancia entre muestras. Con CLR, euclidean equivale a la distancia de Aitchison.",
+    "thresh": "Escala maxima de la filtracion. Vacio = sin limite.",
+    "n_null": "Barajados para el nulo (0 = sin p-valores). Cada uno recalcula la homologia; 20-100 es razonable.",
+    "max_bars": "Barras mas persistentes que se dibujan por dimension en el codigo de barras.",
     "__button__.Ejecutar reduccion": "Aplica preprocesamiento y reduccion dimensional sin hacer clustering.",
     "__button__.Ejecutar DBSCAN": "Ejecuta DBSCAN con los parametros definidos y guarda tablas, metricas y figuras.",
     "__button__.Revisar clusterizacion": "Evalua clusters ya existentes con metricas internas, tamanos, ruido y recomendacion.",
@@ -751,6 +764,8 @@ class MicrobiotaGUI(tk.Tk):
         self._build_kde_tab()
         self._build_kruskal_tab()
         self._build_mann_whitney_tab()
+        self._build_odds_ratio_tab()
+        self._build_topology_tab()
         self._build_dimensionality_tab()
         self._build_dbscan_tab()
         self._build_cluster_review_tab()
@@ -2364,6 +2379,82 @@ class MicrobiotaGUI(tk.Tk):
         )
 
 
+    def _build_odds_ratio_tab(self):
+        group = "odds_ratio"
+        tab = self._new_tab("Odds Ratio")
+        box = self._section(tab, "Parametros", 0)
+
+        self._add_combo(box, group, "group_df_name", "Dataset grupos", [], "", 0, 0, dataset_combo=True)
+        self._add_combo(box, group, "value_df_name", "Dataset valores", [], "", 0, 2, dataset_combo=True)
+        self._add_combo(
+            box, group, "group_col", "Columna grupo", [], "", 1, 0,
+            column_for=("odds_ratio", "group_df_name")
+        )
+        self._add_numeric_columns_dropdown(
+            box, group, "feature_cols", "Variables",
+            dataset_key="value_df_name", row=1, col=2, width=42
+        )
+        self._add_combo(
+            box, group, "id_col_group", "ID grupos", [], "", 2, 0,
+            column_for=("odds_ratio", "group_df_name")
+        )
+        self._add_combo(
+            box, group, "id_col_value", "ID valores", [], "", 2, 2,
+            column_for=("odds_ratio", "value_df_name")
+        )
+        self._add_entry(box, group, "positive_label", "Grupo positivo", "", 3, 0)
+        self._add_entry(box, group, "negative_label", "Grupo negativo", "", 3, 2)
+        self._add_entry(box, group, "presence_threshold", "Umbral presencia", "", 4, 0)
+        self._add_entry(box, group, "high_quantile", "Percentil alto", "0.75", 4, 2)
+        self._add_entry(box, group, "alpha", "Alpha", "0.05", 5, 0)
+        self._add_entry(box, group, "feature_label", "Nombre variable", "variable", 5, 2)
+        self._add_check(box, group, "apply_fdr", "Aplicar FDR", True, 6, 0)
+        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 6, 2)
+
+        self._run_button(
+            tab,
+            1,
+            "Ejecutar Odds Ratio",
+            lambda: self.run_analysis("odds_ratio")
+        )
+
+
+    def _build_topology_tab(self):
+        group = "topology"
+        tab = self._new_tab("Topologia")
+
+        data_box = self._section(tab, "Datos y preprocesamiento", 0)
+        self._add_combo(data_box, group, "data_df_name", "Dataset", [], "", 0, 0, dataset_combo=True)
+        self._add_combo(data_box, group, "id_col", "ID", [], "", 0, 2, column_for=("topology", "data_df_name"))
+        self._add_numeric_columns_dropdown(
+            data_box, group, "feature_cols", "Features",
+            dataset_key="data_df_name", row=1, col=0, width=42
+        )
+        self._add_combo(data_box, group, "missing_strategy", "Faltantes", ["fill_zero", "drop_rows", "median"], "fill_zero", 2, 0)
+        self._add_check(data_box, group, "remove_zero_rows", "Quitar filas suma 0", True, 2, 2)
+        self._add_entry(data_box, group, "min_prevalence", "Min prevalence", "", 3, 0)
+        self._add_entry(data_box, group, "min_total_abundance", "Min abundance", "", 3, 2)
+
+        model_box = self._section(tab, "Espacio de trabajo", 1)
+        self._add_combo(model_box, group, "transform_method", "Transformacion", ["none", "log1p", "clr"], "clr", 0, 0)
+        self._add_entry(model_box, group, "pseudocount", "Pseudocount", "1.0", 0, 2)
+        self._add_check(model_box, group, "scale", "Escalar variables", False, 1, 0)
+        self._add_combo(model_box, group, "embedding_method", "Embedding", ["none", "pca", "kpca", "isomap", "mds", "tsne", "umap"], "pca", 1, 2)
+        self._add_entry(model_box, group, "n_components", "Componentes", "10", 2, 0)
+        self._add_entry(model_box, group, "random_state", "Random state", "42", 2, 2)
+
+        ph_box = self._section(tab, "Homologia persistente", 2)
+        self._add_combo(ph_box, group, "maxdim", "Dimension maxima", ["0", "1", "2"], "1", 0, 0)
+        self._add_combo(ph_box, group, "metric", "Metrica", ["euclidean", "cityblock", "cosine", "correlation"], "euclidean", 0, 2)
+        self._add_entry(ph_box, group, "thresh", "Escala maxima", "", 1, 0)
+        self._add_entry(ph_box, group, "n_null", "Barajados nulo", "0", 1, 2)
+        self._add_entry(ph_box, group, "alpha", "Alpha", "0.05", 2, 0)
+        self._add_entry(ph_box, group, "max_bars", "Barras", "40", 2, 2)
+        self._add_check(ph_box, group, "verbose", "Mostrar resumen en log", True, 3, 0)
+
+        self._run_button(tab, 3, "Ejecutar homologia persistente", lambda: self.run_analysis("topology"))
+
+
     def _build_dimensionality_tab(self):
         group = "dimensionality"
         tab = self._new_tab("Reduccion")
@@ -3973,6 +4064,8 @@ class MicrobiotaGUI(tk.Tk):
             "kde": "KDE",
             "kruskal": "Kruskal-Wallis",
             "mann_whitney": "Mann-Whitney",
+            "odds_ratio": "Odds Ratio",
+            "topology": "Topologia",
             "dimensionality": "Reduccion",
             "dbscan": "DBSCAN",
             "cluster_review": "Revision clusters",
@@ -4889,6 +4982,48 @@ class MicrobiotaGUI(tk.Tk):
                 "verbose": parse_bool(values["verbose"]),
             }
 
+        if analysis == "odds_ratio":
+            return {
+                "group_df_name": values["group_df_name"],
+                "value_df_name": values["value_df_name"].strip() or None,
+                "group_col": values["group_col"],
+                "id_col_group": values["id_col_group"],
+                "id_col_value": values["id_col_value"],
+                "feature_cols": split_list(values["feature_cols"]),
+                "positive_label": values["positive_label"].strip() or None,
+                "negative_label": values["negative_label"].strip() or None,
+                "presence_threshold": parse_optional_float(values["presence_threshold"]),
+                "high_quantile": float(values["high_quantile"]),
+                "alpha": float(values["alpha"]),
+                "feature_label": values["feature_label"].strip() or "variable",
+                "apply_fdr": parse_bool(values["apply_fdr"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
+        if analysis == "topology":
+            return {
+                "data_df_name": values["data_df_name"],
+                "id_col": values["id_col"].strip() or None,
+                "feature_cols": split_list(values["feature_cols"]),
+                "maxdim": int(values["maxdim"]),
+                "metric": values["metric"],
+                "thresh": parse_optional_float(values["thresh"]),
+                "missing_strategy": values["missing_strategy"],
+                "remove_zero_rows": parse_bool(values["remove_zero_rows"]),
+                "min_prevalence": parse_optional_float(values["min_prevalence"]),
+                "min_total_abundance": parse_optional_float(values["min_total_abundance"]),
+                "transform_method": values["transform_method"],
+                "pseudocount": float(values["pseudocount"]),
+                "scale": parse_bool(values["scale"]),
+                "embedding_method": values["embedding_method"],
+                "n_components": int(values["n_components"]),
+                "random_state": int(values["random_state"]),
+                "n_null": int(values["n_null"] or 0),
+                "alpha": float(values["alpha"]),
+                "max_bars": int(values["max_bars"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
         if analysis == "dimensionality":
             return {
                 "data_df_name": values["data_df_name"],
@@ -4978,6 +5113,10 @@ class MicrobiotaGUI(tk.Tk):
             return kruskal_wallis_from_loaded(dfs=self.dfs, **params)
         if analysis == "mann_whitney":
             return mann_whitney_from_loaded(dfs=self.dfs, **params)
+        if analysis == "odds_ratio":
+            return odds_ratio_from_loaded(dfs=self.dfs, **params)
+        if analysis == "topology":
+            return persistent_homology_from_loaded(dfs=self.dfs, **params)
         if analysis == "dimensionality":
             return dimensionality_from_loaded(dfs=self.dfs, **params)
         if analysis == "dbscan":
