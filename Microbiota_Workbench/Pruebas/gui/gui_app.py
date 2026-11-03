@@ -39,6 +39,8 @@ from modules.characterization import distribution_plots_from_loaded, normality_t
 from modules.kde import kde_from_loaded
 from modules.kruskal_wallis import kruskal_wallis_from_loaded
 from modules.mann_whitney import mann_whitney_from_loaded
+from modules.odds_ratio import odds_ratio_from_loaded
+from modules.topology import persistent_homology_from_loaded
 from modules.dbscan import dbscan_from_loaded
 from modules.exploration import (
     cluster_review_from_loaded,
@@ -49,12 +51,15 @@ from modules.exploration import (
 from modules.visualizations import (
     Debouncer,
     InteractiveController,
+    LinkedDistributionView,
     PresetStore,
     ViewHistory,
     VisualizationConfig,
     build_visualization,
+    compare_selection,
     dataset_from_selection,
     export_plot_result,
+    format_selection_comparison,
     infer_filter_specs,
     recommend_visualizations,
     suggest_analysis_routes,
@@ -88,6 +93,17 @@ HELP_TEXTS = {
     "__button__.Ejecutar KDE": "Estima densidades KDE para abundancias positivas y compara kernels.",
     "__button__.Ejecutar Kruskal-Wallis": "Compara tres o mas grupos para cada variable numerica seleccionada.",
     "__button__.Ejecutar Mann-Whitney": "Compara dos grupos para cada variable numerica seleccionada.",
+    "__button__.Ejecutar Odds Ratio": "Calcula OR con IC y prueba exacta de Fisher (presencia y valor alto) de cada variable contra dos grupos.",
+    "positive_label": "Grupo de referencia del OR (el que se compara). Si queda vacio se deduce cuando la columna tiene dos valores.",
+    "negative_label": "Grupo contra el que se compara. Si queda vacio se deduce cuando la columna tiene dos valores.",
+    "presence_threshold": "Umbral de presencia. Vacio = presente si el valor es mayor que 0; con numero, presente si valor >= umbral.",
+    "high_quantile": "Percentil (0-1) de los valores positivos que define 'valor alto'. 0.75 = cuartil superior.",
+    "__button__.Ejecutar homologia persistente": "Calcula diagramas de persistencia (H0, H1, H2) con Vietoris-Rips y, opcionalmente, un p-valor contra un nulo por barajado.",
+    "maxdim": "Dimension homologica maxima: 0 componentes, 1 ciclos, 2 cavidades. 2 es mucho mas lento.",
+    "metric": "Distancia entre muestras. Con CLR, euclidean equivale a la distancia de Aitchison.",
+    "thresh": "Escala maxima de la filtracion. Vacio = sin limite.",
+    "n_null": "Barajados para el nulo (0 = sin p-valores). Cada uno recalcula la homologia; 20-100 es razonable.",
+    "max_bars": "Barras mas persistentes que se dibujan por dimension en el codigo de barras.",
     "__button__.Ejecutar reduccion": "Aplica preprocesamiento y reduccion dimensional sin hacer clustering.",
     "__button__.Ejecutar DBSCAN": "Ejecuta DBSCAN con los parametros definidos y guarda tablas, metricas y figuras.",
     "__button__.Revisar clusterizacion": "Evalua clusters ya existentes con metricas internas, tamanos, ruido y recomendacion.",
@@ -182,7 +198,7 @@ HELP_TEXTS = {
     "rank_search": "Filtra rank-abundancia por texto contenido en el nombre de la feature.",
     "hover_enabled": "Activa tooltips al mover el mouse sobre puntos del gráfico.",
     "inspector_enabled": "Al hacer clic sobre un punto muestra el registro completo en el inspector.",
-    "selection_mode": "Permite seleccionar observaciones con lazo o rectángulo para crear subconjuntos.",
+    "selection_mode": "Herramienta de selección activa (se cambia sin redibujar). Shift suma, Ctrl resta, Esc limpia. También puedes hacer clic sobre una categoría o una barra de histograma para seleccionar sus registros.",
     "legend_toggle": "Permite hacer clic en la leyenda para ocultar o volver a mostrar series.",
     "__button__.Recomendar vistas": "Analiza el dataset y propone gráficos útiles que puedes aplicar con un clic.",
     "__button__.Guardar preset": "Guarda la configuración actual del constructor para reutilizarla después.",
@@ -191,6 +207,7 @@ HELP_TEXTS = {
     "__button__.Rehacer": "Restaura una configuración que acabas de deshacer.",
     "__button__.Reset vista": "Restaura los límites originales de zoom y desplazamiento del gráfico.",
     "__button__.Abrir HTML": "Abre la versión Plotly interactiva en el navegador cuando está disponible.",
+    "__button__.Invertir selección": "Selecciona todos los registros visibles que no estaban seleccionados.",
     "__button__.Crear dataset selección": "Crea un nuevo dataset en memoria con las observaciones seleccionadas en el gráfico.",
     "__button__.Exportar todo": "Exporta PNG, SVG, PDF, CSV, XLSX y HTML interactivo de la vista actual.",
 }
@@ -201,6 +218,35 @@ def sanitize_name(value, fallback="artifact"):
     text = re.sub(r"[^\w.\-]+", "_", text, flags=re.ASCII)
     text = text.strip("._")
     return text[:120] or fallback
+
+
+def relocate_artifact_path(path_text, run_dir=None):
+    """Ubica un archivo listado en un manifest aunque la carpeta de corridas se haya movido.
+
+    Los manifests guardan rutas absolutas; si ya no existen, se buscan dentro de `run_dir`
+    (misma ruta desde el nombre de la carpeta de la corrida, o por nombre en sus subcarpetas).
+    """
+    path = Path(path_text)
+    if path.exists() or run_dir is None:
+        return path
+
+    run_dir = Path(run_dir)
+    if not path.is_absolute():
+        return run_dir / path
+
+    parts = path.parts
+    if run_dir.name in parts:
+        idx = len(parts) - 1 - parts[::-1].index(run_dir.name)
+        candidate = run_dir.joinpath(*parts[idx + 1:])
+        if candidate.exists():
+            return candidate
+
+    for sub in ("", "tables", "figures", "arrays", "objects", "html"):
+        candidate = run_dir / sub / path.name
+        if candidate.exists():
+            return candidate
+
+    return path
 
 
 def unique_name(name, existing):
@@ -751,6 +797,8 @@ class MicrobiotaGUI(tk.Tk):
         self._build_kde_tab()
         self._build_kruskal_tab()
         self._build_mann_whitney_tab()
+        self._build_odds_ratio_tab()
+        self._build_topology_tab()
         self._build_dimensionality_tab()
         self._build_dbscan_tab()
         self._build_cluster_review_tab()
@@ -1975,6 +2023,14 @@ class MicrobiotaGUI(tk.Tk):
         create_sel_btn = ttk.Button(interaction_box, text="Crear dataset selección", command=self.create_dataset_from_visual_selection)
         create_sel_btn.grid(row=2, column=3, sticky="ew", pady=(6, 0))
         HelpTooltip(create_sel_btn, HELP_TEXTS["__button__.Crear dataset selección"])
+        invert_btn = ttk.Button(interaction_box, text="Invertir selección", command=self.invert_visual_selection)
+        invert_btn.grid(row=3, column=2, sticky="ew", padx=(0, 16), pady=(6, 0))
+        HelpTooltip(invert_btn, HELP_TEXTS["__button__.Invertir selección"])
+        ttk.Label(
+            interaction_box,
+            text="Shift suma · Ctrl resta · Esc limpia · clic en categoría o barra selecciona sus registros",
+            style="Subtle.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         # ------------------------------------------------------------------
         # 6) Acciones de navegación/configuración
@@ -2065,8 +2121,23 @@ class MicrobiotaGUI(tk.Tk):
 
         self.visual_builder_stats_text = tk.Text(stats_frame, height=9, wrap="word", relief="flat", bg="#ffffff")
         self.visual_builder_stats_text.grid(row=0, column=0, sticky="ew")
-        self.visual_builder_selection_text = tk.Text(selection_frame, height=9, wrap="none", relief="flat", bg="#ffffff")
-        self.visual_builder_selection_text.grid(row=0, column=0, sticky="ew")
+        self.visual_builder_selection_text = tk.Text(selection_frame, height=14, wrap="none", relief="flat", bg="#ffffff")
+        self.visual_builder_selection_text.grid(row=0, column=0, sticky="nsew")
+        selection_scroll = ttk.Scrollbar(selection_frame, orient="vertical", command=self.visual_builder_selection_text.yview)
+        selection_scroll.grid(row=0, column=1, sticky="ns")
+        self.visual_builder_selection_text.configure(yscrollcommand=selection_scroll.set)
+
+        linked_frame = ttk.Frame(selection_frame)
+        linked_frame.grid(row=0, column=2, sticky="ns", padx=(10, 0))
+        ttk.Label(linked_frame, text="Vista enlazada", style="Subtle.TLabel").grid(row=0, column=0, sticky="w")
+        self.visual_linked_var = tk.StringVar(value="")
+        self.visual_linked_combo = ttk.Combobox(linked_frame, textvariable=self.visual_linked_var, state="readonly", width=28)
+        self.visual_linked_combo.grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        self.visual_linked_combo.bind("<<ComboboxSelected>>", self._on_visual_linked_column)
+        linked_figure = Figure(figsize=(4.2, 2.6), dpi=100)
+        linked_canvas = FigureCanvasTkAgg(linked_figure, master=linked_frame)
+        linked_canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew")
+        self.visual_linked = LinkedDistributionView(linked_figure, linked_canvas, pd.DataFrame())
         self.visual_builder_record_text = tk.Text(record_frame, height=9, wrap="word", relief="flat", bg="#ffffff")
         self.visual_builder_record_text.grid(row=0, column=0, sticky="ew")
         self._set_visual_text(self.visual_builder_stats_text, "Actualiza una visualización para ver estadísticas.")
@@ -2362,6 +2433,82 @@ class MicrobiotaGUI(tk.Tk):
             "Ejecutar Mann-Whitney",
             lambda: self.run_analysis("mann_whitney")
         )
+
+
+    def _build_odds_ratio_tab(self):
+        group = "odds_ratio"
+        tab = self._new_tab("Odds Ratio")
+        box = self._section(tab, "Parametros", 0)
+
+        self._add_combo(box, group, "group_df_name", "Dataset grupos", [], "", 0, 0, dataset_combo=True)
+        self._add_combo(box, group, "value_df_name", "Dataset valores", [], "", 0, 2, dataset_combo=True)
+        self._add_combo(
+            box, group, "group_col", "Columna grupo", [], "", 1, 0,
+            column_for=("odds_ratio", "group_df_name")
+        )
+        self._add_numeric_columns_dropdown(
+            box, group, "feature_cols", "Variables",
+            dataset_key="value_df_name", row=1, col=2, width=42
+        )
+        self._add_combo(
+            box, group, "id_col_group", "ID grupos", [], "", 2, 0,
+            column_for=("odds_ratio", "group_df_name")
+        )
+        self._add_combo(
+            box, group, "id_col_value", "ID valores", [], "", 2, 2,
+            column_for=("odds_ratio", "value_df_name")
+        )
+        self._add_entry(box, group, "positive_label", "Grupo positivo", "", 3, 0)
+        self._add_entry(box, group, "negative_label", "Grupo negativo", "", 3, 2)
+        self._add_entry(box, group, "presence_threshold", "Umbral presencia", "", 4, 0)
+        self._add_entry(box, group, "high_quantile", "Percentil alto", "0.75", 4, 2)
+        self._add_entry(box, group, "alpha", "Alpha", "0.05", 5, 0)
+        self._add_entry(box, group, "feature_label", "Nombre variable", "variable", 5, 2)
+        self._add_check(box, group, "apply_fdr", "Aplicar FDR", True, 6, 0)
+        self._add_check(box, group, "verbose", "Mostrar resumen en log", True, 6, 2)
+
+        self._run_button(
+            tab,
+            1,
+            "Ejecutar Odds Ratio",
+            lambda: self.run_analysis("odds_ratio")
+        )
+
+
+    def _build_topology_tab(self):
+        group = "topology"
+        tab = self._new_tab("Topologia")
+
+        data_box = self._section(tab, "Datos y preprocesamiento", 0)
+        self._add_combo(data_box, group, "data_df_name", "Dataset", [], "", 0, 0, dataset_combo=True)
+        self._add_combo(data_box, group, "id_col", "ID", [], "", 0, 2, column_for=("topology", "data_df_name"))
+        self._add_numeric_columns_dropdown(
+            data_box, group, "feature_cols", "Features",
+            dataset_key="data_df_name", row=1, col=0, width=42
+        )
+        self._add_combo(data_box, group, "missing_strategy", "Faltantes", ["fill_zero", "drop_rows", "median"], "fill_zero", 2, 0)
+        self._add_check(data_box, group, "remove_zero_rows", "Quitar filas suma 0", True, 2, 2)
+        self._add_entry(data_box, group, "min_prevalence", "Min prevalence", "", 3, 0)
+        self._add_entry(data_box, group, "min_total_abundance", "Min abundance", "", 3, 2)
+
+        model_box = self._section(tab, "Espacio de trabajo", 1)
+        self._add_combo(model_box, group, "transform_method", "Transformacion", ["none", "log1p", "clr"], "clr", 0, 0)
+        self._add_entry(model_box, group, "pseudocount", "Pseudocount", "1.0", 0, 2)
+        self._add_check(model_box, group, "scale", "Escalar variables", False, 1, 0)
+        self._add_combo(model_box, group, "embedding_method", "Embedding", ["none", "pca", "kpca", "isomap", "mds", "tsne", "umap"], "pca", 1, 2)
+        self._add_entry(model_box, group, "n_components", "Componentes", "10", 2, 0)
+        self._add_entry(model_box, group, "random_state", "Random state", "42", 2, 2)
+
+        ph_box = self._section(tab, "Homologia persistente", 2)
+        self._add_combo(ph_box, group, "maxdim", "Dimension maxima", ["0", "1", "2"], "1", 0, 0)
+        self._add_combo(ph_box, group, "metric", "Metrica", ["euclidean", "cityblock", "cosine", "correlation"], "euclidean", 0, 2)
+        self._add_entry(ph_box, group, "thresh", "Escala maxima", "", 1, 0)
+        self._add_entry(ph_box, group, "n_null", "Barajados nulo", "0", 1, 2)
+        self._add_entry(ph_box, group, "alpha", "Alpha", "0.05", 2, 0)
+        self._add_entry(ph_box, group, "max_bars", "Barras", "40", 2, 2)
+        self._add_check(ph_box, group, "verbose", "Mostrar resumen en log", True, 3, 0)
+
+        self._run_button(tab, 3, "Ejecutar homologia persistente", lambda: self.run_analysis("topology"))
 
 
     def _build_dimensionality_tab(self):
@@ -2831,6 +2978,15 @@ class MicrobiotaGUI(tk.Tk):
         if key == "df_name":
             self.after_idle(self.refresh_visual_filter_candidates)
 
+        if key == "selection_mode":
+            controller = getattr(self, "visual_builder_interaction", None)
+            if controller is not None:
+                try:
+                    controller.set_tool(self.inputs[group]["selection_mode"].get())
+                except Exception:
+                    pass
+            return
+
         if key == "rank_abundance":
             try:
                 if parse_bool(self.inputs[group]["rank_abundance"].get()):
@@ -3199,16 +3355,11 @@ class MicrobiotaGUI(tk.Tk):
         if parse_bool(self.inputs["visualization"]["inspector_enabled"].get()):
             controller.attach_point_inspector()
 
-        selection_mode = self._input_value("visualization", "selection_mode", "Ninguna")
-        if selection_mode == "Lazo":
-            for ax in result.axes:
-                controller.attach_lasso(ax)
-        elif selection_mode == "Rectángulo":
-            for ax in result.axes:
-                controller.attach_rectangle(ax)
+        controller.attach_selection(self._input_value("visualization", "selection_mode", "Ninguna"))
         if parse_bool(self.inputs["visualization"]["legend_toggle"].get()):
             controller.attach_legend_toggle()
         self.visual_builder_interaction = controller
+        self._refresh_visual_linked_view(result, state)
 
         plot_type = result.metadata.get("plot_type", state.get("plot_type", ""))
         rows = len(result.data) if isinstance(result.data, pd.DataFrame) else 0
@@ -3257,6 +3408,7 @@ class MicrobiotaGUI(tk.Tk):
         self.visual_builder_selected_indices = list(indices)
         self.visual_builder_selected_df = selected_df.copy()
         self.visual_selection_status_var.set(f"{len(indices)} registros seleccionados")
+        self.visual_linked.update(indices)
 
         if selected_df.empty:
             self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
@@ -3279,6 +3431,14 @@ class MicrobiotaGUI(tk.Tk):
         if routes:
             lines.extend(["", "Rutas sugeridas:"])
             lines.extend(f"- {route.get('label', route.get('module'))}" for route in routes)
+
+        data = self.visual_builder_result.data if self.visual_builder_result is not None else None
+        if isinstance(data, pd.DataFrame):
+            try:
+                comparison = compare_selection(data, indices)
+                lines.extend(["", "Seleccionado vs resto", format_selection_comparison(comparison)])
+            except Exception as exc:
+                lines.extend(["", f"No se pudo comparar con el resto: {exc}"])
         self._set_visual_text(self.visual_builder_selection_text, "\n".join(lines))
 
 
@@ -3290,7 +3450,30 @@ class MicrobiotaGUI(tk.Tk):
         if update_text and hasattr(self, "visual_builder_selection_text"):
             self._set_visual_text(self.visual_builder_selection_text, "No hay registros seleccionados.")
         if self.visual_builder_interaction is not None:
-            self.visual_builder_interaction.selected_indices = []
+            self.visual_builder_interaction.clear_selection(emit=False)
+        if getattr(self, "visual_linked", None) is not None:
+            self.visual_linked.update([])
+
+
+    def invert_visual_selection(self):
+        controller = self.visual_builder_interaction
+        if controller is None:
+            messagebox.showinfo(APP_TITLE, "Genera primero una gráfica para poder seleccionar.")
+            return
+        controller.invert_selection()
+
+
+    def _refresh_visual_linked_view(self, result, state):
+        data = result.data if isinstance(result.data, pd.DataFrame) else pd.DataFrame()
+        preferred = state.get("y") or state.get("x")
+        self.visual_linked.set_data(data, preferred)
+        options = self.visual_linked.candidates()
+        self.visual_linked_combo.configure(values=options)
+        self.visual_linked_var.set(self.visual_linked.column or "")
+
+
+    def _on_visual_linked_column(self, _event=None):
+        self.visual_linked.set_column(self.visual_linked_var.get())
 
 
     def create_dataset_from_visual_selection(self):
@@ -3794,12 +3977,7 @@ class MicrobiotaGUI(tk.Tk):
         notes = []
 
         def resolve(path_text):
-            path = Path(path_text)
-            if path.is_absolute() or path.exists():
-                return path
-            if run_dir:
-                return Path(run_dir) / path
-            return path
+            return relocate_artifact_path(path_text, run_dir)
 
         for table in tables[:8]:
             path = resolve(table.get("path", ""))
@@ -3973,6 +4151,8 @@ class MicrobiotaGUI(tk.Tk):
             "kde": "KDE",
             "kruskal": "Kruskal-Wallis",
             "mann_whitney": "Mann-Whitney",
+            "odds_ratio": "Odds Ratio",
+            "topology": "Topologia",
             "dimensionality": "Reduccion",
             "dbscan": "DBSCAN",
             "cluster_review": "Revision clusters",
@@ -4556,15 +4736,7 @@ class MicrobiotaGUI(tk.Tk):
 
 
     def _artifact_path(self, path_text):
-        path = Path(path_text)
-        if path.is_absolute():
-            return path
-        if path.exists():
-            return path
-        run_dir = self.result_run_dirs.get(self.active_result_key)
-        if run_dir:
-            return run_dir / path
-        return path
+        return relocate_artifact_path(path_text, self.result_run_dirs.get(self.active_result_key))
 
 
     def clear_table_preview(self, message):
@@ -4889,6 +5061,48 @@ class MicrobiotaGUI(tk.Tk):
                 "verbose": parse_bool(values["verbose"]),
             }
 
+        if analysis == "odds_ratio":
+            return {
+                "group_df_name": values["group_df_name"],
+                "value_df_name": values["value_df_name"].strip() or None,
+                "group_col": values["group_col"],
+                "id_col_group": values["id_col_group"],
+                "id_col_value": values["id_col_value"],
+                "feature_cols": split_list(values["feature_cols"]),
+                "positive_label": values["positive_label"].strip() or None,
+                "negative_label": values["negative_label"].strip() or None,
+                "presence_threshold": parse_optional_float(values["presence_threshold"]),
+                "high_quantile": float(values["high_quantile"]),
+                "alpha": float(values["alpha"]),
+                "feature_label": values["feature_label"].strip() or "variable",
+                "apply_fdr": parse_bool(values["apply_fdr"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
+        if analysis == "topology":
+            return {
+                "data_df_name": values["data_df_name"],
+                "id_col": values["id_col"].strip() or None,
+                "feature_cols": split_list(values["feature_cols"]),
+                "maxdim": int(values["maxdim"]),
+                "metric": values["metric"],
+                "thresh": parse_optional_float(values["thresh"]),
+                "missing_strategy": values["missing_strategy"],
+                "remove_zero_rows": parse_bool(values["remove_zero_rows"]),
+                "min_prevalence": parse_optional_float(values["min_prevalence"]),
+                "min_total_abundance": parse_optional_float(values["min_total_abundance"]),
+                "transform_method": values["transform_method"],
+                "pseudocount": float(values["pseudocount"]),
+                "scale": parse_bool(values["scale"]),
+                "embedding_method": values["embedding_method"],
+                "n_components": int(values["n_components"]),
+                "random_state": int(values["random_state"]),
+                "n_null": int(values["n_null"] or 0),
+                "alpha": float(values["alpha"]),
+                "max_bars": int(values["max_bars"]),
+                "verbose": parse_bool(values["verbose"]),
+            }
+
         if analysis == "dimensionality":
             return {
                 "data_df_name": values["data_df_name"],
@@ -4978,6 +5192,10 @@ class MicrobiotaGUI(tk.Tk):
             return kruskal_wallis_from_loaded(dfs=self.dfs, **params)
         if analysis == "mann_whitney":
             return mann_whitney_from_loaded(dfs=self.dfs, **params)
+        if analysis == "odds_ratio":
+            return odds_ratio_from_loaded(dfs=self.dfs, **params)
+        if analysis == "topology":
+            return persistent_homology_from_loaded(dfs=self.dfs, **params)
         if analysis == "dimensionality":
             return dimensionality_from_loaded(dfs=self.dfs, **params)
         if analysis == "dbscan":
